@@ -11,10 +11,11 @@ fn main() {
     let events_loop = EventLoop::new();
     let wb = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+        .with_inner_size(winit::dpi::LogicalSize::new(600.0, 600.0));
     
+    // create the SpriteRender
     let (window, render) = SpriteRender::new(wb, &events_loop);
-
+    
     events_loop.run(move |event, _, control_flow| {
         *control_flow = winit::event_loop::ControlFlow::Wait;
         match event {
@@ -24,9 +25,11 @@ fn main() {
                     WindowEvent::Resized(size) => render.resize(size),
                     _ => (),
                 }
-
-                render.draw();
             },
+            Event::RedrawRequested(window_id) if window_id == window.id() => {
+                // draw
+                render.draw();
+            }
             _ => ()
         }
     });

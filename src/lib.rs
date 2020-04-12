@@ -13,13 +13,20 @@ use std::ffi::CString;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
 #version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor; // Specify a vertex attribute for color
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aUv;
+
+layout (location = 2) in vec4 aTransform;
+layout (location = 3) in vec4 aUvRect;
+layout (location = 4) in vec4 aColor;
+layout (location = 5) in vec2 aOffset;
 out vec3 color;
 void main()
 {
-    gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);
-	color = aColor; // pass the color along to the fragment shader
+    // vec2 pos = mat2(aTransform.xy, aTransform.wz)*aPos;
+    vec2 pos = aPos*mat2(aTransform.xy, aTransform.zw);
+    gl_Position = vec4(pos.x + aOffset.x, pos.y + aOffset.y, 0.0, 1.0);
+	color = aColor.xyz; // pass the color along to the fragment shader
 }
 "#;
 
@@ -127,49 +134,152 @@ impl SpriteRender {
             gl::DeleteShader(fragment_shader);
     
             // Set up vao and vbos
-            let vertices: [f32; 18] = [
-                // left
-                -0.5, -0.5, 0.0, 1.0, 0.0, 0.0,
+            let vertices: [f32; 16] = [
+                // bottom left
+                -0.5, -0.5,   0.0, 1.0,
     
-                // right
-                 0.5, -0.5, 0.0, 0.0, 1.0, 0.0,
+                // bottom right
+                 0.5, -0.5,   1.0, 1.0,
     
-                // top
-                 0.0,  0.5, 0.0, 0.0, 0.0, 1.0
+                // top left
+                -0.5,  0.5,   0.0, 0.0,
+
+                // top right
+                 0.5,  0.5,   1.0, 0.0,
             ];
-    
-            let (mut vbo, mut vao) = (0, 0);
+
+            #[repr(C)]
+            #[derive(Default)]
+            struct Instance {
+                transform: [f32; 4],
+                uv_rect: [f32; 4],
+                color: [f32; 4],
+                pos: [f32; 2],
+            }
+
+
+            // create instance buffer
+            let mut instances: [Instance; 100] = mem::zeroed();
+            let mut i = 0;
+            for y in -5..5 {
+                for x in -5..5 {
+                    // let a = i as f32 * std::f32::consts::PI / 4.0;
+                    let a = ((i  +1)*(i + 3)) as f32;
+                    let r = 0.1;
+
+                    const COLORS: &[[f32; 4]] = &include!("colors.txt");
+
+                    instances[i] = Instance {
+                        transform: [ a.cos()*r, a.sin()*r,
+                                    -a.sin()*r, a.cos()*r],
+                        uv_rect: [0.0, 0.0, 1.0, 1.0],
+                        color: COLORS[i],
+                        pos: [x as f32 / 5.0 + 0.1,
+                              y as f32 / 5.0 + 0.1],
+                    };
+                    i += 1;
+                }
+            }
+
+            let mut instance_buffer = 0;
+
+            gl::GenBuffers(1, &mut instance_buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, instance_buffer);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (instances.len() * mem::size_of::<Instance>()) as GLsizeiptr,
+                &instances[0] as *const _ as *const c_void,
+                gl::STATIC_DRAW
+            );
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            
+
+            // create vertex buffer
+            let mut vertex_buffer = 0;
+            let mut vao = 0;
+
             gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut vbo);
-    
+            gl::GenBuffers(1, &mut vertex_buffer);
+            
             gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
                 (vertices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
                 &vertices[0] as *const f32 as *const c_void,
                 gl::STATIC_DRAW,
+
             );
-    
-            gl::EnableVertexAttribArray(0);
+            const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
+            const INSTANCE_STRIDE: GLsizei = 14 * mem::size_of::<GLfloat>() as GLsizei;
+            
+            // 0, 1 are per vertex
+            gl::EnableVertexAttribArray(0); // aPos
             gl::VertexAttribPointer(
                 0,
-                3,
+                2,
                 gl::FLOAT,
                 gl::FALSE,
-                6 * mem::size_of::<GLfloat>() as GLsizei,
+                VERTEX_STRIDE,
                 ptr::null(),
             );
-    
-            gl::EnableVertexAttribArray(1);
+
+            gl::EnableVertexAttribArray(1); // aUv
             gl::VertexAttribPointer(
                 1,
-                3,
+                2,
                 gl::FLOAT,
                 gl::FALSE,
-                6 * mem::size_of::<GLfloat>() as GLsizei,
-                (3 * mem::size_of::<GLfloat>()) as *const c_void
+                VERTEX_STRIDE,
+                (2 * mem::size_of::<GLfloat>()) as *const c_void
             );
+
+            // 2, 3, 4 are per instance
+            gl::BindBuffer(gl::ARRAY_BUFFER, instance_buffer);
+
+            gl::EnableVertexAttribArray(2); // aTransform
+            gl::VertexAttribPointer(
+                2,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                INSTANCE_STRIDE,
+                0 as *const c_void
+            );
+            gl::VertexAttribDivisor(2, 1);
+
+            gl::EnableVertexAttribArray(3); // aUvRect
+            gl::VertexAttribPointer(
+                3,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                INSTANCE_STRIDE,
+                (4 * mem::size_of::<GLfloat>()) as *const c_void
+            );
+            gl::VertexAttribDivisor(3, 1);
+
+            gl::EnableVertexAttribArray(4); // aColor
+            gl::VertexAttribPointer(
+                4,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                INSTANCE_STRIDE,
+                (8 * mem::size_of::<GLfloat>()) as *const c_void
+            );
+            gl::VertexAttribDivisor(4, 1);
+
+            gl::EnableVertexAttribArray(5); // aOffset
+            gl::VertexAttribPointer(
+                5,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                INSTANCE_STRIDE,
+                (12 * mem::size_of::<GLfloat>()) as *const c_void
+            );
+            gl::VertexAttribDivisor(5, 1);
     
     
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
@@ -197,7 +307,7 @@ impl SpriteRender {
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl::UseProgram(self.shader_program);
             gl::BindVertexArray(self.vao);
-            gl::DrawArrays(gl::TRIANGLES, 0, 3);
+            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, 100);
         }
 
         self.context.swap_buffers().unwrap();
