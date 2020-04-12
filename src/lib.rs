@@ -9,7 +9,7 @@ use std::mem;
 use std::ptr;
 use std::str;
 use std::os::raw::c_void;
-use std::ffi::CString;
+use std::ffi::{ CString, CStr };
 
 const VERTEX_SHADER_SOURCE: &str = r#"
 #version 330 core
@@ -20,31 +20,70 @@ layout (location = 2) in vec4 aTransform;
 layout (location = 3) in vec4 aUvRect;
 layout (location = 4) in vec4 aColor;
 layout (location = 5) in vec2 aOffset;
-out vec3 color;
+out vec4 color;
 void main()
 {
     // vec2 pos = mat2(aTransform.xy, aTransform.wz)*aPos;
     vec2 pos = aPos*mat2(aTransform.xy, aTransform.zw);
     gl_Position = vec4(pos.x + aOffset.x, pos.y + aOffset.y, 0.0, 1.0);
-	color = aColor.xyz; // pass the color along to the fragment shader
+	color = aColor; // pass the color along to the fragment shader
 }
 "#;
 
 const FRAGMENT_SHADER_SOURCE: &str = r#"
 #version 330 core
 out vec4 FragColor;
-in vec3 color;
+in vec4 color;
 void main()
 {
    // Set the fragment color to the color passed from the vertex shader
-   FragColor = vec4(color, 1.0);
+   FragColor = vec4(color);
 }
 "#;
+
+unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
+    let mut error_code = gl::GetError();
+    while error_code != gl::NO_ERROR {
+        let error = match error_code {
+            gl::INVALID_ENUM => "INVALID_ENUM",
+            gl::INVALID_VALUE => "INVALID_VALUE",
+            gl::INVALID_OPERATION => "INVALID_OPERATION",
+            gl::STACK_OVERFLOW => "STACK_OVERFLOW",
+            gl::STACK_UNDERFLOW => "STACK_UNDERFLOW",
+            gl::OUT_OF_MEMORY => "OUT_OF_MEMORY",
+            gl::INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
+            _ => "unknown GL error code"
+        };
+
+        println!("{}:{:4} {}: {}", file, line, label, error);
+
+        error_code = gl::GetError();
+    }
+    error_code
+}
+
+macro_rules! gl_check_error {
+    ($($arg:tt)*) => (
+        gl_check_error_(file!(), line!(), &format!($($arg)*))
+    )
+}
+
+#[repr(C)]
+#[derive(Default, Clone)]
+pub struct SpriteInstance {
+    pub transform: [f32; 4],
+    pub uv_rect: [f32; 4],
+    pub color: [f32; 4],
+    pub pos: [f32; 2],
+    pub _padding: [f32; 2],
+}
 
 pub struct SpriteRender {
     context: glutin::RawContext<glutin::PossiblyCurrent>,
     shader_program: u32,
     vao: u32,
+    instance_buffer: u32,
+    instance_buffer_size: u32,
 }
 impl SpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
@@ -61,8 +100,23 @@ impl SpriteRender {
         };
     
         gl::load_with(|symbol| context.get_proc_address(symbol) as *const _);
+
+        // unsafe {
+        //     let mut num_extensions = 0;
+        //     gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut num_extensions);
+        //     println!("extensions({}):", num_extensions);
+        //     for i in 0..num_extensions as u32 {
+        //         let string = gl::GetStringi(gl::EXTENSIONS, i);
+        //         let string = CStr::from_ptr(string as *const i8);
+        //         println!("{}", string.to_str().unwrap());
+        //     }
+        // }
+        unsafe {
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::Enable( gl::BLEND );
+        }
     
-        let (shader_program, vao) = unsafe {
+        let (shader_program, vao, instance_buffer) = unsafe {
             // Setup shader compilation checks
             let mut success = i32::from(gl::FALSE);
             let mut info_log = Vec::with_capacity(512);
@@ -147,39 +201,8 @@ impl SpriteRender {
                 // top right
                  0.5,  0.5,   1.0, 0.0,
             ];
-
-            #[repr(C)]
-            #[derive(Default)]
-            struct Instance {
-                transform: [f32; 4],
-                uv_rect: [f32; 4],
-                color: [f32; 4],
-                pos: [f32; 2],
-            }
-
-
+            
             // create instance buffer
-            let mut instances: [Instance; 100] = mem::zeroed();
-            let mut i = 0;
-            for y in -5..5 {
-                for x in -5..5 {
-                    // let a = i as f32 * std::f32::consts::PI / 4.0;
-                    let a = ((i  +1)*(i + 3)) as f32;
-                    let r = 0.1;
-
-                    const COLORS: &[[f32; 4]] = &include!("colors.txt");
-
-                    instances[i] = Instance {
-                        transform: [ a.cos()*r, a.sin()*r,
-                                    -a.sin()*r, a.cos()*r],
-                        uv_rect: [0.0, 0.0, 1.0, 1.0],
-                        color: COLORS[i],
-                        pos: [x as f32 / 5.0 + 0.1,
-                              y as f32 / 5.0 + 0.1],
-                    };
-                    i += 1;
-                }
-            }
 
             let mut instance_buffer = 0;
 
@@ -187,9 +210,9 @@ impl SpriteRender {
             gl::BindBuffer(gl::ARRAY_BUFFER, instance_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (instances.len() * mem::size_of::<Instance>()) as GLsizeiptr,
-                &instances[0] as *const _ as *const c_void,
-                gl::STATIC_DRAW
+                (100 * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
+                0 as *const c_void,
+                gl::DYNAMIC_DRAW
             );
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             
@@ -211,7 +234,7 @@ impl SpriteRender {
 
             );
             const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
-            const INSTANCE_STRIDE: GLsizei = 14 * mem::size_of::<GLfloat>() as GLsizei;
+            const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
             
             // 0, 1 are per vertex
             gl::EnableVertexAttribArray(0); // aPos
@@ -288,7 +311,7 @@ impl SpriteRender {
             // Wireframe
             // gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
     
-            (shader_program, vao)
+            (shader_program, vao, instance_buffer)
         };
     
         (
@@ -297,17 +320,48 @@ impl SpriteRender {
                 shader_program,
                 vao,
                 context,
+                instance_buffer,
+                instance_buffer_size: 100,
             }
         )
     }
 
-    pub fn draw(&self) {
+    fn realloacte_instance_buffer(&mut self, size_need: usize) {
+        let new_size = size_need.next_power_of_two();
         unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (new_size * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
+                0 as *const c_void,
+                gl::DYNAMIC_DRAW
+            );
+            gl_check_error!("reallocate_instance_buffer({})", (new_size * mem::size_of::<SpriteInstance>()) as GLsizeiptr);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+        }
+        self.instance_buffer_size = new_size as u32;
+    }
+
+    pub fn draw(&mut self, sprites: &[SpriteInstance]) {
+        if sprites.len() > self.instance_buffer_size as usize {
+            self.realloacte_instance_buffer(sprites.len());
+        }
+        unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
+            gl::BufferSubData(
+                gl::ARRAY_BUFFER,
+                0,
+                (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
+                sprites as *const _ as *const c_void
+            );
+            gl_check_error!("instance_buffer_write({})", (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+
             gl::ClearColor(0.39, 0.58, 0.92, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl::UseProgram(self.shader_program);
             gl::BindVertexArray(self.vao);
-            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, 100);
+            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
         }
 
         self.context.swap_buffers().unwrap();

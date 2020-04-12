@@ -14,3 +14,4 @@ gl = "0.14"
 [dev-dependencies]
 
 winit = "0.22"
+rand = "0.7"
