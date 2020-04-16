@@ -12,6 +12,9 @@ use std::os::raw::c_void;
 use std::ffi::{ CString };
 use std::collections::HashMap;
 
+mod common;
+pub use common::*;
+
 const VERTEX_SHADER_SOURCE: &str = r#"
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -23,17 +26,17 @@ layout (location = 4) in vec4 aColor;
 layout (location = 5) in vec2 aOffset;
 layout (location = 6) in int aTextureIndex;
 
+uniform mat3 view;
+
 out vec4 color;
 out vec2 TexCoord;
 flat out int TextureIndex;
 
-
 void main()
 {
-    // vec2 pos = mat2(aTransform.xy, aTransform.wz)*aPos;
-    vec2 pos = aPos*mat2(aTransform.xy, aTransform.zw);
-    gl_Position = vec4(pos.x + aOffset.x, pos.y + aOffset.y, 0.0, 1.0);
-    color = aColor; // pass the color along to the fragment shader
+    vec2 pos = aOffset + aPos*mat2(aTransform.xy, aTransform.zw);
+    gl_Position = vec4((vec3(pos, 1.0) * view).xy, 0.0, 1.0);
+    color = aColor;
     TexCoord = aUvRect.xy + aUv*aUvRect.zw;
     TextureIndex = aTextureIndex;
 }
@@ -51,7 +54,6 @@ uniform sampler2D text[16];
 
 void main()
 {
-   // Set the fragment color to the color passed from the vertex shader
    vec4 textureColor = texture(text[TextureIndex], TexCoord);
    if (textureColor.a == 0.0 || color.a == 0.0) {
        discard;
@@ -74,7 +76,7 @@ unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
             _ => "unknown GL error code"
         };
 
-        println!("{}:{:4} {}: {}", file, line, label, error);
+        println!("[{}:{:4}] {}: {}", file, line, label, error);
 
         error_code = gl::GetError();
     }
@@ -87,17 +89,6 @@ macro_rules! gl_check_error {
     )
 }
 
-#[repr(C)]
-#[derive(Default, Clone)]
-pub struct SpriteInstance {
-    pub transform: [f32; 4],
-    pub uv_rect: [f32; 4],
-    pub color: [f32; 4],
-    pub pos: [f32; 2],
-    pub texture: u32,
-    pub _padding: [f32; 1],
-}
-
 pub struct SpriteRender {
     context: glutin::RawContext<glutin::PossiblyCurrent>,
     shader_program: u32,
@@ -106,7 +97,7 @@ pub struct SpriteRender {
     instance_buffer_size: u32,
     textures: Vec<u32>,
     /// maps a texture to a texture unit
-    texture_unit_map: HashMap<u32, u32>,
+    texture_unit_map: HashMap<u32, u32>, 
 }
 impl SpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
@@ -348,22 +339,25 @@ impl SpriteRender {
     
             (shader_program, vao, instance_buffer)
         };
+
+        let mut sprite_render = Self {
+            shader_program,
+            vao,
+            context,
+            instance_buffer,
+            instance_buffer_size: 100,
+            textures: Vec::new(),
+            texture_unit_map: HashMap::new(),
+        };
+        sprite_render.resize(window.inner_size());
     
         (
             window,
-            SpriteRender {
-                shader_program,
-                vao,
-                context,
-                instance_buffer,
-                instance_buffer_size: 100,
-                textures: Vec::new(),
-                texture_unit_map: HashMap::new(),
-            }
+            sprite_render  
         )
     }
 
-    fn realloacte_instance_buffer(&mut self, size_need: usize) {
+    fn reallocate_instance_buffer(&mut self, size_need: usize) {
         let new_size = size_need.next_power_of_two();
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
@@ -400,9 +394,9 @@ impl SpriteRender {
         }
     }
 
-    pub fn draw(&mut self, sprites: &[SpriteInstance]) {
+    pub fn draw(&mut self, camera: &mut Camera, sprites: &[SpriteInstance]) {
         if sprites.len() > self.instance_buffer_size as usize {
-            self.realloacte_instance_buffer(sprites.len());
+            self.reallocate_instance_buffer(sprites.len());
         }
 
         unsafe {
@@ -444,7 +438,10 @@ impl SpriteRender {
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl::UseProgram(self.shader_program);
             static TEXT_UNITS: [i32; 16] = [0i32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            gl::Uniform1iv(gl::GetUniformLocation(self.shader_program, CString::new("text").unwrap().as_ptr()), 16, TEXT_UNITS.as_ptr());
+            gl::Uniform1iv(gl::GetUniformLocation(self.shader_program, CString::new("text").unwrap().as_ptr()), 
+                16, TEXT_UNITS.as_ptr());
+            gl::UniformMatrix3fv(gl::GetUniformLocation(self.shader_program, CString::new("view").unwrap().as_ptr()), 
+                1, gl::FALSE, camera.view().as_ptr());
             gl::BindVertexArray(self.vao);
             gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
 
@@ -454,7 +451,10 @@ impl SpriteRender {
         self.context.swap_buffers().unwrap();
     }
 
-    pub fn resize(&self, size: PhysicalSize<u32>) {
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.context.resize(size);
+        unsafe {
+            gl::Viewport(0, 0, size.width as i32, size.height as i32);
+        }
     }
 }

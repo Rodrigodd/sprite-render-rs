@@ -1,16 +1,17 @@
-use sprite_render::{ SpriteRender, SpriteInstance };
+use sprite_render::{ SpriteRender, SpriteInstance, Camera };
 
 use winit::{
     event_loop::EventLoop,
     window::WindowBuilder,
-    event::{ Event, WindowEvent, KeyboardInput, VirtualKeyCode, ElementState },
+    event::{ Event, WindowEvent, KeyboardInput, VirtualKeyCode, ElementState, MouseScrollDelta, MouseButton  },
+    dpi::{ LogicalSize, LogicalPosition, PhysicalPosition }
 };
 
 fn main() {
     let events_loop = EventLoop::new();
     let wb = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(winit::dpi::LogicalSize::new(800.0, 800.0));
+        .with_inner_size(LogicalSize::new(800.0, 400.0));
     
     // create the SpriteRender
     let (window, mut render) = SpriteRender::new(wb, &events_loop);
@@ -22,6 +23,8 @@ fn main() {
         let image = image::open("examples/jelly.png").expect("File not Found!").to_rgba();
         render.load_texture(image.width(), image.height(), image.into_raw().as_slice())
     };
+
+    let mut camera = Camera::new(window.inner_size(), 2.0);
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -51,14 +54,20 @@ fn main() {
         };
     }
 
-    let mut time = 0.0f32;
     use std::time::{ Instant };
     let mut clock = Instant::now();
     let mut change_clock = Instant::now();
     let mut change_frame = 0;
     let mut frame_count = 0;
     let mut fps  = 60.0;
+    
+    let mut time = 0.0f32;
     let mut do_anim = true;
+    let mut do_rotation = false;
+    let mut view_size = 2.0;
+    let mut dragging = false;
+    let mut last_cursor_pos = PhysicalPosition{ x: 0.0f32, y:0.0 };
+    let mut cursor_pos = PhysicalPosition{ x: 0.0f32, y:0.0 };
 
     // let mut frame_clock = Instant::now();
     
@@ -68,6 +77,38 @@ fn main() {
             Event::WindowEvent { event, window_id } if window_id == window.id() => {
                 match event {
                     WindowEvent::CloseRequested => *control_flow = winit::event_loop::ControlFlow::Exit,
+                    WindowEvent::MouseWheel {delta, ..} => match delta {
+                        MouseScrollDelta::LineDelta(_, dy) => {
+                            view_size *= 2.0f32.powf(-dy/3.0);
+                            camera.set_height(view_size);
+                            change_clock = Instant::now();
+                            change_frame = frame_count;
+                        }
+                        MouseScrollDelta::PixelDelta(LogicalPosition{ y, ..}) => {
+                            view_size *= 2.0f32.powf(-y as f32/3.0);
+                            println!("pixels: {}", y);
+                            camera.set_height(view_size);
+                            change_clock = Instant::now();
+                            change_frame = frame_count;
+                        }
+                    },
+                    WindowEvent::MouseInput { button: MouseButton::Left, state , ..} => {
+                        dragging = state == ElementState::Pressed;
+                    },
+                    WindowEvent::CursorMoved { position: PhysicalPosition { x, y }, .. } => {
+                        last_cursor_pos = cursor_pos;
+                        cursor_pos.x = x as f32;
+                        cursor_pos.y = y as f32;
+                        if dragging {
+                            let (dx,dy) = camera.vector_to_word_space(
+                                -(cursor_pos.x - last_cursor_pos.x),
+                                cursor_pos.y - last_cursor_pos.y,
+                            );
+                            camera.move_view(dx, dy);
+                            change_clock = Instant::now();
+                            change_frame = frame_count;
+                        }
+                    },
                     WindowEvent::KeyboardInput { input: KeyboardInput {
                         virtual_keycode: Some(key),
                         state: ElementState::Pressed,
@@ -98,9 +139,17 @@ fn main() {
                             change_clock = Instant::now();
                             change_frame = frame_count;
                         },
+                        VirtualKeyCode::R => {
+                            do_rotation = !do_rotation;
+                            change_clock = Instant::now();
+                            change_frame = frame_count;
+                        }
                         _ => ()
                     }
-                    WindowEvent::Resized(size) => render.resize(size),
+                    WindowEvent::Resized(size) => {
+                        render.resize(size);
+                        camera.resize(size);
+                    }
                     _ => (),
                 }
             },
@@ -108,12 +157,15 @@ fn main() {
             Event::MainEventsCleared => {
                 if do_anim {
                     time += 1.0/180.0;
-                    for i in 0..instances.len() {
+                    for i in 0..number_of_sprites {
                         let a = ((i + 1)*(i + 3) % 777) as f32 + time;
                         instances[i].transform = 
                             [ a.cos()*sprite_size, a.sin()*sprite_size,
                             -a.sin()*sprite_size, a.cos()*sprite_size];
                     }
+                }
+                if do_rotation {
+                    camera.rotate_view(std::f32::consts::PI*2.0*(1.0/180.0)/30.0);
                 }
                 window.request_redraw();
             }
@@ -134,7 +186,7 @@ fn main() {
                 // frame_clock = Instant::now();
                 // if elapsed < 1.0/60.0 {
                 // std::thread::sleep(Duration::from_secs_f32(1.0/60.0));
-                render.draw(&instances[0..number_of_sprites]);
+                render.draw(&mut camera, &instances[0..number_of_sprites]);
             }
             _ => ()
         }
