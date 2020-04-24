@@ -9,7 +9,38 @@ pub struct SpriteInstance {
     pub color: [f32; 4],
     pub pos: [f32; 2],
     pub texture: u32,
-    pub _padding: [f32; 1],
+}
+impl SpriteInstance {
+    /// Create a new SpriteInstant with center in (x,y) and with width, height, texture and uv_rect sets
+    /// Default color is [1.0, 1.0, 1.0, 1.0]
+    pub fn new(x: f32, y: f32, width: f32, height: f32, texture: u32, uv_rect: [f32;4]) -> Self {
+        Self {
+            transform: [width, 0.0, 0.0, height],
+            uv_rect,
+            color: [1.0; 4],
+            pos: [x, y],
+            texture,
+        }
+    }
+
+    /// set the transformation matrix, responsible for the rotation and scale.
+    /// angle is in counterclockwise radians
+    pub fn set_transform(&mut self, width: f32, height: f32, angle: f32) {
+        let cos = angle.cos();
+        let sin = angle.sin();
+        self.transform = [
+            width*cos, -height*sin,
+            width*sin,  height*cos,
+        ];
+    }
+
+    pub fn set_position(&mut self, x: f32, y: f32) {
+        self.pos = [x, y];
+    }
+
+    pub fn set_color(&mut self, color: [f32; 4]) {
+        self.color = color;
+    }
 }
 
 /// The camera encapsulates the projection matrix, providing methods to move, 
@@ -48,7 +79,7 @@ impl Camera {
             if self.rotation == 0.0 {
                 self.view_matrix = [
                       w,  0.0, -self.x*w,
-                    0.0,    h, -self.y*h,
+                    0.0,   h, -self.y*h,
                     0.0,  0.0, 1.0,
                 ];
             } else {
@@ -71,12 +102,28 @@ impl Camera {
         self.set_height(self.height);
     }
 
-    /// Converts a vector from the screen space (in pixels) to word space
+    /// Converts a position in the screen space (in pixels) to word space
+    pub fn position_to_word_space(&self, x: f32, y: f32) -> (f32, f32) {
+        let x = (x - self.screen_size.width  as f32 / 2.0)*self.width/self.screen_size.width  as f32;
+        let y = (y - self.screen_size.height as f32 / 2.0)*self.height/self.screen_size.height as f32;
+        if self.rotation == 0.0 {
+            (x + self.x, y + self.y)
+        } else {
+            let cos = self.rotation.cos();
+            let sin = self.rotation.sin();
+            (
+                cos*x - sin*y + self.x,
+                sin*x + cos*y + self.y
+            )
+        }
+    }
+
+    /// Converts a vector in the screen space (in pixels) to word space
     pub fn vector_to_word_space(&self, x: f32, y: f32) -> (f32, f32) {
         // from screen to clip space: x' = x*2.0/sceen_width
         // during x' times camera matrix  x'' = cos*x'*self.width/2.0 = cos*x*self.width/self.screen_width
         let x = x*self.width/self.screen_size.width  as f32;
-        let y = y*self.height/self.screen_size.height as f32;
+        let y = -y*self.height/self.screen_size.height as f32;
         if self.rotation == 0.0 {
             (x, y)
         } else {

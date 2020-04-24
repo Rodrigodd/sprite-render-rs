@@ -15,6 +15,9 @@ use std::collections::HashMap;
 mod common;
 pub use common::*;
 
+const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
+const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
+
 const VERTEX_SHADER_SOURCE: &str = r#"
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -36,6 +39,7 @@ void main()
 {
     vec2 pos = aOffset + aPos*mat2(aTransform.xy, aTransform.zw);
     gl_Position = vec4((vec3(pos, 1.0) * view).xy, 0.0, 1.0);
+    gl_Position.y *= -1.0;
     color = aColor;
     TexCoord = aUvRect.xy + aUv*aUvRect.zw;
     TextureIndex = aTextureIndex;
@@ -101,9 +105,10 @@ pub struct SpriteRender {
 }
 impl SpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
-    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoop<T>) -> (Window, Self) {
+    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoop<T>, vsync: bool) -> (Window, Self) {
         let (context, window) = unsafe {
                 glutin::ContextBuilder::new()
+                    .with_vsync(vsync)
                     .build_windowed(wb, event_loop)
                     .unwrap()
                     .split()
@@ -204,18 +209,18 @@ impl SpriteRender {
             gl::DeleteShader(fragment_shader);
     
             // Set up vao and vbos
-            let vertices: [f32; 16] = [
+            const VERTICES: [f32; 16] = [
                 // bottom left
-                -0.5, -0.5,   0.0, 1.0,
+                -0.5, -0.5,   0.0, 0.0,
     
                 // bottom right
-                 0.5, -0.5,   1.0, 1.0,
+                 0.5, -0.5,   1.0, 0.0,
     
                 // top left
-                -0.5,  0.5,   0.0, 0.0,
+                -0.5,  0.5,   0.0, 1.0,
 
                 // top right
-                 0.5,  0.5,   1.0, 0.0,
+                 0.5,  0.5,   1.0, 1.0,
             ];
             
             // create instance buffer
@@ -223,14 +228,6 @@ impl SpriteRender {
             let mut instance_buffer = 0;
 
             gl::GenBuffers(1, &mut instance_buffer);
-            gl::BindBuffer(gl::ARRAY_BUFFER, instance_buffer);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (100 * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
-                0 as *const c_void,
-                gl::DYNAMIC_DRAW
-            );
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             
 
             // create vertex buffer
@@ -244,13 +241,11 @@ impl SpriteRender {
             gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (vertices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
-                &vertices[0] as *const f32 as *const c_void,
+                (VERTICES.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
+                &VERTICES[0] as *const f32 as *const c_void,
                 gl::STATIC_DRAW,
 
             );
-            const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
-            const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
             
             // 0, 1 are per vertex
             gl::EnableVertexAttribArray(0); // aPos
@@ -345,7 +340,7 @@ impl SpriteRender {
             vao,
             context,
             instance_buffer,
-            instance_buffer_size: 100,
+            instance_buffer_size: 0,
             textures: Vec::new(),
             texture_unit_map: HashMap::new(),
         };
@@ -363,26 +358,28 @@ impl SpriteRender {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (new_size * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
+                (new_size * INSTANCE_STRIDE as usize) as GLsizeiptr,
                 0 as *const c_void,
                 gl::DYNAMIC_DRAW
             );
-            gl_check_error!("reallocate_instance_buffer({})", (new_size * mem::size_of::<SpriteInstance>()) as GLsizeiptr);
+            gl_check_error!("reallocate_instance_buffer({})", (new_size * INSTANCE_STRIDE as usize) as GLsizeiptr);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
         }
         self.instance_buffer_size = new_size as u32;
     }
 
-    pub fn load_texture(&mut self, width: u32, height: u32, data: &[u8]) -> u32 {
+    /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
+    /// Pixel art don't use linear filter.
+    pub fn load_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
         unsafe {
             let mut texture = 0;
-            gl::ActiveTexture(gl::TEXTURE0 + self.textures.len() as u32);
+            gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
             gl::GenTextures(1, &mut texture);
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S,     gl::REPEAT as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T,     gl::REPEAT as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, if linear_filter { gl::LINEAR } else { gl::NEAREST } as i32);
             gl::TexImage2D(
                 gl::TEXTURE_2D, 0,
                 gl::RGBA as i32, width as i32, height as i32,
@@ -400,50 +397,55 @@ impl SpriteRender {
         }
 
         unsafe {
-            // copy sprites into gpu memory
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
-            loop {
-                let mut cursor = gl::MapBufferRange(
-                    gl::ARRAY_BUFFER,
-                    0,
-                    (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
-                    gl::MAP_WRITE_BIT
-                ) as *mut u8;
+            if sprites.len() == 0 {
+                gl::ClearColor(0.3, 0.15, 0.0, 1.0);
+                gl::Clear(gl::COLOR_BUFFER_BIT);
+            } else {
+                // copy sprites into gpu memory
+                gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
+                loop {
+                    let mut cursor = gl::MapBufferRange(
+                        gl::ARRAY_BUFFER,
+                        0,
+                        (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr,
+                        gl::MAP_WRITE_BIT
+                    ) as *mut u8;
 
-                
-                for sprite in sprites {
-                    let texture_unit = if let Some(t) = self.texture_unit_map.get(&sprite.texture) {
-                        *t
-                    } else {
-                        gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
-                        gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
-                        self.texture_unit_map.insert(sprite.texture, self.texture_unit_map.len() as u32);
-                        self.texture_unit_map.len() as u32-1
-                    };
-                    ptr::copy_nonoverlapping(mem::transmute(sprite), cursor, mem::size_of::<SpriteInstance>() - 2*4);
-                    ptr::copy_nonoverlapping(mem::transmute(&texture_unit), cursor.add(14*4), mem::size_of::<u32>());
-                    cursor = cursor.add(mem::size_of::<SpriteInstance>());
-                }
+                    
+                    for sprite in sprites {
+                        let texture_unit = if let Some(t) = self.texture_unit_map.get(&sprite.texture) {
+                            *t
+                        } else {
+                            gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
+                            gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
+                            self.texture_unit_map.insert(sprite.texture, self.texture_unit_map.len() as u32);
+                            self.texture_unit_map.len() as u32-1
+                        };
+                        ptr::copy_nonoverlapping(mem::transmute(sprite), cursor, mem::size_of::<SpriteInstance>() - 4);
+                        ptr::copy_nonoverlapping(mem::transmute(&texture_unit), cursor.add(mem::size_of::<SpriteInstance>() - 4), mem::size_of::<u32>());
+                        cursor = cursor.add(INSTANCE_STRIDE as usize);
+                    }
 
-                let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
-                b = gl::NO_ERROR != gl_check_error!("instance_buffer_write({})", (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr) || b;
-                if b {
-                    break;
+                    let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
+                    b = gl::NO_ERROR != gl_check_error!("instance_buffer_write({})", (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr) || b;
+                    if b {
+                        break;
+                    }
                 }
+                gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+
+                // render
+                gl::ClearColor(0.3, 0.15, 0.0, 1.0);
+                gl::Clear(gl::COLOR_BUFFER_BIT);
+                gl::UseProgram(self.shader_program);
+                static TEXT_UNITS: [i32; 16] = [0i32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+                gl::Uniform1iv(gl::GetUniformLocation(self.shader_program, CString::new("text").unwrap().as_ptr()), 
+                    16, TEXT_UNITS.as_ptr());
+                gl::UniformMatrix3fv(gl::GetUniformLocation(self.shader_program, CString::new("view").unwrap().as_ptr()), 
+                    1, gl::FALSE, camera.view().as_ptr());
+                gl::BindVertexArray(self.vao);
+                gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
             }
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-
-            // render
-            gl::ClearColor(0.39, 0.58, 0.92, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT);
-            gl::UseProgram(self.shader_program);
-            static TEXT_UNITS: [i32; 16] = [0i32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            gl::Uniform1iv(gl::GetUniformLocation(self.shader_program, CString::new("text").unwrap().as_ptr()), 
-                16, TEXT_UNITS.as_ptr());
-            gl::UniformMatrix3fv(gl::GetUniformLocation(self.shader_program, CString::new("view").unwrap().as_ptr()), 
-                1, gl::FALSE, camera.view().as_ptr());
-            gl::BindVertexArray(self.vao);
-            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
 
             gl_check_error!("end frame");
         }

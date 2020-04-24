@@ -14,14 +14,14 @@ fn main() {
         .with_inner_size(LogicalSize::new(800.0, 400.0));
     
     // create the SpriteRender
-    let (window, mut render) = SpriteRender::new(wb, &events_loop);
+    let (window, mut render) = SpriteRender::new(wb, &events_loop, false);
     let fruit_texture = {
         let image = image::open("examples/fruits.png").expect("File not Found!").to_rgba();
-        render.load_texture(image.width(), image.height(), image.into_raw().as_slice())
+        render.load_texture(image.width(), image.height(), image.into_raw().as_slice(), true)
     };
     let jelly_texture =   {
         let image = image::open("examples/jelly.png").expect("File not Found!").to_rgba();
-        render.load_texture(image.width(), image.height(), image.into_raw().as_slice())
+        render.load_texture(image.width(), image.height(), image.into_raw().as_slice(), true)
     };
 
     let mut camera = Camera::new(window.inner_size(), 2.0);
@@ -50,7 +50,6 @@ fn main() {
             color: COLORS[i%100],
             pos: [rng.gen_range(-1.0, 1.0), rng.gen_range(-1.0, 1.0)],
             texture: if rng.gen() { fruit_texture } else { jelly_texture },
-            _padding : [0.0; 1],
         };
     }
 
@@ -101,8 +100,8 @@ fn main() {
                         cursor_pos.y = y as f32;
                         if dragging {
                             let (dx,dy) = camera.vector_to_word_space(
-                                -(cursor_pos.x - last_cursor_pos.x),
-                                cursor_pos.y - last_cursor_pos.y,
+                                last_cursor_pos.x - cursor_pos.x,
+                                last_cursor_pos.y - cursor_pos.y,
                             );
                             camera.move_view(dx, dy);
                             change_clock = Instant::now();
