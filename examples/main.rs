@@ -1,4 +1,4 @@
-use sprite_render::{ SpriteRender, SpriteInstance, Camera };
+use sprite_render::{ default_render, SpriteInstance, Camera };
 
 use winit::{
     event_loop::EventLoop,
@@ -7,6 +7,16 @@ use winit::{
     dpi::{ LogicalSize, LogicalPosition, PhysicalPosition }
 };
 
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen(start)]
+    pub fn run() {
+        super::main();
+    }
+}
+
 fn main() {
     let events_loop = EventLoop::new();
     let wb = WindowBuilder::new()
@@ -14,7 +24,7 @@ fn main() {
         .with_inner_size(LogicalSize::new(800.0, 400.0));
     
     // create the SpriteRender
-    let (window, mut render) = SpriteRender::new(wb, &events_loop, false);
+    let (window, mut render) = default_render(wb, &events_loop, false);
     let fruit_texture = {
         let image = image::open("examples/fruits.png").expect("File not Found!").to_rgba();
         render.load_texture(image.width(), image.height(), image.into_raw().as_slice(), true)
@@ -34,7 +44,7 @@ fn main() {
     let mut instances: Box<[SpriteInstance]> = vec![SpriteInstance::default(); 16384].into_boxed_slice();
     for i in (0..instances.len()).into_iter().rev() {
 
-        const COLORS: &[[f32; 4]] = &include!("colors.txt");
+        const COLORS: &[[u8; 4]] = &include!("colors.txt");
         const SPRITE: &[[f32; 4]] = &[
             [0.0, 0.0, 1.0/3.0, 1.0/2.0],
             [1.0/3.0, 0.0, 1.0/3.0, 1.0/2.0],
@@ -43,14 +53,15 @@ fn main() {
             [1.0/3.0, 1.0/2.0, 1.0/3.0, 1.0/2.0],
         ];
 
-        instances[i] = SpriteInstance {
-            transform: [ 1.0, 0.0,
-                         0.0, 1.0 ],
-            uv_rect: SPRITE[i%SPRITE.len()],
-            color: COLORS[i%100],
-            pos: [rng.gen_range(-1.0, 1.0), rng.gen_range(-1.0, 1.0)],
-            texture: if rng.gen() { fruit_texture } else { jelly_texture },
-        };
+        instances[i] = SpriteInstance::new(
+            rng.gen_range(-1.0, 1.0),
+            rng.gen_range(-1.0, 1.0),
+            sprite_size,
+            sprite_size,
+            if rng.gen() { fruit_texture } else { jelly_texture },
+            SPRITE[i%SPRITE.len()]
+        ).with_color(COLORS[i%100]);
+
     }
 
     use std::time::{ Instant };
@@ -85,7 +96,6 @@ fn main() {
                         }
                         MouseScrollDelta::PixelDelta(LogicalPosition{ y, ..}) => {
                             view_size *= 2.0f32.powf(-y as f32/3.0);
-                            println!("pixels: {}", y);
                             camera.set_height(view_size);
                             change_clock = Instant::now();
                             change_frame = frame_count;
@@ -146,7 +156,7 @@ fn main() {
                         _ => ()
                     }
                     WindowEvent::Resized(size) => {
-                        render.resize(size);
+                        render.resize(size.width, size.height);
                         camera.resize(size);
                     }
                     _ => (),
@@ -158,9 +168,8 @@ fn main() {
                     time += 1.0/180.0;
                     for i in 0..number_of_sprites {
                         let a = ((i + 1)*(i + 3) % 777) as f32 + time;
-                        instances[i].transform = 
-                            [ a.cos()*sprite_size, a.sin()*sprite_size,
-                            -a.sin()*sprite_size, a.cos()*sprite_size];
+                        instances[i].set_angle(a);
+                        instances[i].set_size(sprite_size, sprite_size);
                     }
                 }
                 if do_rotation {
@@ -176,9 +185,12 @@ fn main() {
                     let elapsed = clock.elapsed().as_secs_f32();
                     clock = Instant::now();
                     fps = 60.0/elapsed;
-                    window.set_title(&format!("SpriteRender | {:9.2} FPS | {} sprites with size {:.3} | mean: {:9.2} FPS",
-                        fps, number_of_sprites, sprite_size, (frame_count - change_frame) as f32/change_clock.elapsed().as_secs_f32())
-                    );
+                    let mean_fps = (frame_count - change_frame) as f32/change_clock.elapsed().as_secs_f32();
+                    window.set_title(&format!("SpriteRender | {:9.2} FPS ({:7.3} ms) | {} sprites with size {:.3} | mean: {:9.2} FPS ({:7.3} ms)",
+                        fps, 1000.0 / fps,
+                        number_of_sprites, sprite_size,
+                        mean_fps, 1000.0 / mean_fps
+                    ));
                 }
                 // let elapsed = frame_clock.elapsed().as_secs_f32();
                 // println!("elapsed: {:5.2}, sleep: {:5.2}", elapsed*1000.0, (1.0/60.0 - elapsed)*1000.0);
