@@ -46,6 +46,7 @@ pub fn default_render<T>(wb: WindowBuilder, event_loop: &EventLoop<T>, vsync: bo
             let _ = vsync;
             (window, Box::new(render))
         } else {
+            let _ = vsync;
             (wb.build(event_loop).unwrap(), Box::new(EmptySpriteRender))
         }
     }
