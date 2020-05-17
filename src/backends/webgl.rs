@@ -17,7 +17,7 @@ use std::io::{ self, Write };
 
 
 use crate::common::*;
-use crate::SpriteRender;
+use crate::{ SpriteRender, Renderer};
 
 const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
@@ -94,6 +94,84 @@ macro_rules! gl_check_error {
     ($context:expr,$($arg:tt)*) => (
         gl_check_error_($context, file!(), line!(), &format!($($arg)*))
     )
+}
+
+pub struct WebGLRenderer<'a> {
+    render: &'a mut WebGLSpriteRender,
+}
+impl<'a> Renderer for WebGLRenderer<'a> {
+    fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer {
+        self.render.context.clear_color(color[0], color[1], color[2], color[3]);
+        self.render.context.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
+        self
+    }
+
+    fn draw_sprites(&mut self, camera: &mut Camera, sprites: &[SpriteInstance]) -> &mut dyn Renderer {
+        if sprites.len() == 0 {
+            return self;
+        }
+        if sprites.len() > self.render.buffer_size as usize {
+            self.render.reallocate_instance_buffer(sprites.len());
+        }
+        
+        unsafe {
+            let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
+            for sprite in sprites {
+                let texture_unit = if let Some(t) = self.render.texture_unit_map.get(&sprite.texture) {
+                    *t
+                } else {
+                    if self.render.texture_unit_map.len() == self.render.max_texture_units as usize {
+                        unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
+                    }
+                    self.render.context.active_texture(WebGlRenderingContext::TEXTURE0 + self.render.texture_unit_map.len() as u32);
+                    self.render.context.bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(&self.render.textures[sprite.texture as usize - 1]));
+                    self.render.texture_unit_map.insert(sprite.texture, self.render.texture_unit_map.len() as u32);
+                    self.render.texture_unit_map.len() as u32-1
+                };
+                WebGLSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
+            }
+        
+            self.render.context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&self.render.buffer));
+            self.render.context.buffer_sub_data_with_i32_and_u8_array(
+                WebGlRenderingContext::ARRAY_BUFFER, 0,
+                &data
+            );
+        }
+
+        // self.render.context.enable_vertex_attrib_array(0);
+        // self.render.context.vertex_attrib_pointer_with_i32(0, 2, WebGlRenderingContext::FLOAT, false, SPRITE_VERTEX_STRIDE as i32, 0);
+        // self.render.context.enable_vertex_attrib_array(1);
+        // self.render.context.vertex_attrib_pointer_with_i32(1, 3, WebGlRenderingContext::FLOAT, false, SPRITE_VERTEX_STRIDE as i32, mem::size_of::<f32>() as i32 * 2);
+
+        gl_check_error!(&self.render.context, "after write");
+
+        self.render.context.uniform_matrix3fv_with_f32_array(
+            self.render.context.get_uniform_location(&self.render.shader_program, "view").as_ref(),
+            false, camera.view()
+        );
+        let text_units = (0..self.render.max_texture_units).collect::<Vec<i32>>();
+        self.render.context.uniform1iv_with_i32_array(
+            self.render.context.get_uniform_location(&self.render.shader_program, "text").as_ref(), 
+            &text_units
+        );
+
+        self.render.context.bind_buffer(WebGlRenderingContext::ELEMENT_ARRAY_BUFFER, Some(&self.render.indice_buffer));
+
+        gl_check_error!(&self.render.context, "pre draw");
+
+        self.render.context.draw_elements_with_i32(
+            WebGlRenderingContext::TRIANGLES,
+            sprites.len() as i32 * 6,
+            WebGlRenderingContext::UNSIGNED_SHORT,
+            0,
+        );
+        self.render.context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, None);
+        self.render.context.bind_buffer(WebGlRenderingContext::ELEMENT_ARRAY_BUFFER, None);
+        gl_check_error!(&self.render.context, "end frame");
+        self
+    }
+
+    fn finish(&mut self) {}
 }
 
 pub struct WebGLSpriteRender {
@@ -395,68 +473,8 @@ impl SpriteRender for WebGLSpriteRender {
         self.textures.len() as u32
     }
 
-    fn draw(&mut self, camera: &mut Camera, sprites: &[SpriteInstance]) {
-        self.context.clear_color(0.0, 0.3, 0.0, 1.0);
-        self.context.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
-
-        if sprites.len() > self.buffer_size as usize {
-            self.reallocate_instance_buffer(sprites.len());
-        }
-        
-        unsafe {
-            let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
-            for sprite in sprites {
-                let texture_unit = if let Some(t) = self.texture_unit_map.get(&sprite.texture) {
-                    *t
-                } else {
-                    if self.texture_unit_map.len() == self.max_texture_units as usize {
-                        unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
-                    }
-                    self.context.active_texture(WebGlRenderingContext::TEXTURE0 + self.texture_unit_map.len() as u32);
-                    self.context.bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(&self.textures[sprite.texture as usize - 1]));
-                    self.texture_unit_map.insert(sprite.texture, self.texture_unit_map.len() as u32);
-                    self.texture_unit_map.len() as u32-1
-                };
-                Self::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
-            }
-        
-            self.context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&self.buffer));
-            self.context.buffer_sub_data_with_i32_and_u8_array(
-                WebGlRenderingContext::ARRAY_BUFFER, 0,
-                &data
-            );
-        }
-
-        // self.context.enable_vertex_attrib_array(0);
-        // self.context.vertex_attrib_pointer_with_i32(0, 2, WebGlRenderingContext::FLOAT, false, SPRITE_VERTEX_STRIDE as i32, 0);
-        // self.context.enable_vertex_attrib_array(1);
-        // self.context.vertex_attrib_pointer_with_i32(1, 3, WebGlRenderingContext::FLOAT, false, SPRITE_VERTEX_STRIDE as i32, mem::size_of::<f32>() as i32 * 2);
-
-        gl_check_error!(&self.context, "after write");
-
-        self.context.uniform_matrix3fv_with_f32_array(
-            self.context.get_uniform_location(&self.shader_program, "view").as_ref(),
-            false, camera.view()
-        );
-        let text_units = (0..self.max_texture_units).collect::<Vec<i32>>();
-        self.context.uniform1iv_with_i32_array(
-            self.context.get_uniform_location(&self.shader_program, "text").as_ref(), 
-            &text_units
-        );
-
-        self.context.bind_buffer(WebGlRenderingContext::ELEMENT_ARRAY_BUFFER, Some(&self.indice_buffer));
-
-        gl_check_error!(&self.context, "pre draw");
-
-        self.context.draw_elements_with_i32(
-            WebGlRenderingContext::TRIANGLES,
-            sprites.len() as i32 * 6,
-            WebGlRenderingContext::UNSIGNED_SHORT,
-            0,
-        );
-        self.context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, None);
-        self.context.bind_buffer(WebGlRenderingContext::ELEMENT_ARRAY_BUFFER, None);
-        gl_check_error!(&self.context, "end frame");
+    fn render<'a>(&'a mut self) -> Box<dyn Renderer + 'a>{
+        Box::new(WebGLRenderer { render: self })
     }
 
     fn resize(&mut self, width: u32, height: u32) {

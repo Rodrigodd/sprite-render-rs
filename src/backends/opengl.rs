@@ -13,7 +13,7 @@ use std::ffi::{ CString };
 use std::collections::HashMap;
 
 use crate::common::*;
-use crate::SpriteRender;
+use crate::{ SpriteRender, Renderer };
 
 const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
 const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
@@ -94,6 +94,87 @@ macro_rules! gl_check_error {
     ($($arg:tt)*) => (
         gl_check_error_(file!(), line!(), &format!($($arg)*))
     )
+}
+
+pub struct GLRenderer<'a> {
+    render: &'a mut GLSpriteRender,
+}
+impl<'a> Renderer for GLRenderer<'a> {
+    fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer {
+        unsafe {
+            gl::ClearColor(color[0], color[1], color[2], color[3]);
+            gl::Clear(gl::COLOR_BUFFER_BIT);
+        }
+        self
+    }
+
+    fn draw_sprites(&mut self, camera: &mut Camera, sprites: &[SpriteInstance]) -> &mut dyn Renderer {
+        if sprites.len() == 0 {
+            return self;
+        }
+        if sprites.len() > self.render.instance_buffer_size as usize {
+            self.render.reallocate_instance_buffer(sprites.len());
+        }
+
+        unsafe {
+            // copy sprites into gpu memory
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.instance_buffer);
+            loop {
+                let mut cursor = gl::MapBufferRange(
+                    gl::ARRAY_BUFFER,
+                    0,
+                    (sprites.len() * INSTANCE_STRIDE as usize) as GLsizeiptr,
+                    gl::MAP_WRITE_BIT
+                ) as *mut u8;
+
+                
+                for sprite in sprites {
+                    let texture_unit = if let Some(t) = self.render.texture_unit_map.get(&sprite.texture) {
+                        *t
+                    } else {
+                        if self.render.texture_unit_map.len() == self.render.max_texture_units as usize {
+                            unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
+                        }
+                        gl::ActiveTexture(gl::TEXTURE0 + self.render.texture_unit_map.len() as u32);
+                        gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
+                        self.render.texture_unit_map.insert(sprite.texture, self.render.texture_unit_map.len() as u32);
+                        self.render.texture_unit_map.len() as u32-1
+                    };
+                    ptr::copy_nonoverlapping(mem::transmute(sprite), cursor, mem::size_of::<SpriteInstance>());
+                    ptr::copy_nonoverlapping(
+                        mem::transmute(&texture_unit),
+                        cursor.add(memoffset::offset_of!(SpriteInstance, texture)),
+                        mem::size_of::<u32>()
+                    );
+                    cursor = cursor.add(INSTANCE_STRIDE as usize);
+                }
+
+                let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
+                b = gl::NO_ERROR != gl_check_error!("instance_buffer_write({})", (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr) || b;
+                if b {
+                    break;
+                }
+            }
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+
+            // render
+            gl::UseProgram(self.render.shader_program);
+            let text_units = (0..self.render.max_texture_units).collect::<Vec<i32>>();
+            gl::Uniform1iv(gl::GetUniformLocation(self.render.shader_program, CString::new("text").unwrap().as_ptr()), 
+                16, text_units.as_ptr());
+            gl::UniformMatrix3fv(gl::GetUniformLocation(self.render.shader_program, CString::new("view").unwrap().as_ptr()), 
+                1, gl::FALSE, camera.view().as_ptr());
+            gl::BindVertexArray(self.render.vao);
+            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
+
+            gl_check_error!("end frame");
+        }
+        self
+    }
+
+    fn finish(&mut self) {
+        self.render.context.swap_buffers().unwrap();
+    }
 }
 
 pub struct GLSpriteRender {
@@ -420,73 +501,8 @@ impl SpriteRender for GLSpriteRender {
         }
     }
 
-    fn draw(&mut self, camera: &mut Camera, sprites: &[SpriteInstance]) {
-        if sprites.len() > self.instance_buffer_size as usize {
-            self.reallocate_instance_buffer(sprites.len());
-        }
-
-        unsafe {
-            if sprites.len() == 0 {
-                gl::ClearColor(0.10, 0.05, 0.0, 1.0);
-                gl::Clear(gl::COLOR_BUFFER_BIT);
-            } else {
-                // copy sprites into gpu memory
-                gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
-                loop {
-                    let mut cursor = gl::MapBufferRange(
-                        gl::ARRAY_BUFFER,
-                        0,
-                        (sprites.len() * INSTANCE_STRIDE as usize) as GLsizeiptr,
-                        gl::MAP_WRITE_BIT
-                    ) as *mut u8;
-
-                    
-                    for sprite in sprites {
-                        let texture_unit = if let Some(t) = self.texture_unit_map.get(&sprite.texture) {
-                            *t
-                        } else {
-                            if self.texture_unit_map.len() == self.max_texture_units as usize {
-                                unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
-                            }
-                            gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
-                            gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
-                            self.texture_unit_map.insert(sprite.texture, self.texture_unit_map.len() as u32);
-                            self.texture_unit_map.len() as u32-1
-                        };
-                        ptr::copy_nonoverlapping(mem::transmute(sprite), cursor, mem::size_of::<SpriteInstance>());
-                        ptr::copy_nonoverlapping(
-                            mem::transmute(&texture_unit),
-                            cursor.add(memoffset::offset_of!(SpriteInstance, texture)),
-                            mem::size_of::<u32>()
-                        );
-                        cursor = cursor.add(INSTANCE_STRIDE as usize);
-                    }
-
-                    let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
-                    b = gl::NO_ERROR != gl_check_error!("instance_buffer_write({})", (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr) || b;
-                    if b {
-                        break;
-                    }
-                }
-                gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-
-                // render
-                gl::ClearColor(0.10, 0.05, 0.0, 1.0);
-                gl::Clear(gl::COLOR_BUFFER_BIT);
-                gl::UseProgram(self.shader_program);
-                let text_units = (0..self.max_texture_units).collect::<Vec<i32>>();
-                gl::Uniform1iv(gl::GetUniformLocation(self.shader_program, CString::new("text").unwrap().as_ptr()), 
-                    16, text_units.as_ptr());
-                gl::UniformMatrix3fv(gl::GetUniformLocation(self.shader_program, CString::new("view").unwrap().as_ptr()), 
-                    1, gl::FALSE, camera.view().as_ptr());
-                gl::BindVertexArray(self.vao);
-                gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
-            }
-
-            gl_check_error!("end frame");
-        }
-
-        self.context.swap_buffers().unwrap();
+    fn render<'a>(&'a mut self) -> Box<dyn Renderer + 'a>{
+        Box::new(GLRenderer { render: self })
     }
 
     fn resize(&mut self, width: u32, height: u32) {

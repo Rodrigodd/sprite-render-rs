@@ -197,7 +197,10 @@ fn main() {
                 // frame_clock = Instant::now();
                 // if elapsed < 1.0/60.0 {
                 // std::thread::sleep(Duration::from_secs_f32(1.0/60.0));
-                render.draw(&mut camera, &instances[0..number_of_sprites]);
+                render.render()
+                    .clear_screen(&[0.0f32, 0.0, 1.0, 1.0])
+                    .draw_sprites(&mut camera, &instances[0..number_of_sprites])
+                    .finish();
             }
             _ => ()
         }
