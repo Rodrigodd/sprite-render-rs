@@ -22,7 +22,7 @@ use crate::{ SpriteRender, Renderer};
 const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
-attribute vec3 position;
+attribute vec2 position;
 attribute vec2 uv;
 attribute vec4 aColor;
 attribute float aTexture;
@@ -34,7 +34,7 @@ varying vec2 TexCoord;
 varying float textureIndex;
 
 void main() {
-    gl_Position = vec4(position*view, 1.0);
+    gl_Position = vec4((vec3(position, 1.0) * view).xy, 0.0, 1.0);
     gl_Position.y *= -1.0;
     color = aColor;
     TexCoord = uv;
@@ -144,10 +144,10 @@ impl<'a> Renderer for WebGLRenderer<'a> {
         // self.render.context.vertex_attrib_pointer_with_i32(1, 3, WebGlRenderingContext::FLOAT, false, SPRITE_VERTEX_STRIDE as i32, mem::size_of::<f32>() as i32 * 2);
 
         gl_check_error!(&self.render.context, "after write");
-
+        let view = camera.view();
         self.render.context.uniform_matrix3fv_with_f32_array(
             self.render.context.get_uniform_location(&self.render.shader_program, "view").as_ref(),
-            false, camera.view()
+            false, view
         );
         let text_units = (0..self.render.max_texture_units).collect::<Vec<i32>>();
         self.render.context.uniform1iv_with_i32_array(
