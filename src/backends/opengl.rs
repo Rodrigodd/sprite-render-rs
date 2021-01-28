@@ -4,9 +4,9 @@ use glutin::{
     event_loop::{EventLoop, EventLoopWindowTarget},
     window::Window,
     window::{WindowBuilder, WindowId},
-    ContextCurrentState, ContextError, NotCurrent, PossiblyCurrent, RawContext,
+    ContextCurrentState, NotCurrent, PossiblyCurrent, RawContext,
 };
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem;
 use std::os::raw::c_void;
 use std::ptr;
@@ -55,25 +55,6 @@ void main()
     color = aColor;
     TexCoord = aUvRect.xy + aUv*aUvRect.zw;
     TextureIndex = aTextureIndex;
-}
-"#;
-
-const FRAGMENT_SHADER_SOURCE: &str = r#"
-out vec4 FragColor;
-
-in vec4 color;
-in vec2 TexCoord;
-flat in int TextureIndex;
-
-uniform sampler2D text[MAX_TEXTURE_IMAGE_UNITS];
-
-void main()
-{
-    vec4 textureColor = texture(text[TextureIndex], TexCoord);
-    if (textureColor.a == 0.0 || color.a == 0.0) {
-        discard;
-    }
-    FragColor = color*textureColor;
 }
 "#;
 
@@ -242,6 +223,14 @@ impl Context<PossiblyCurrent> {
             vao,
         }
     }
+
+    unsafe fn make_not_current(self) -> Context<NotCurrent> {
+        let Self { context, vao } = self;
+        Context {
+            context: context.make_not_current().unwrap(),
+            vao,
+        }
+    }
 }
 impl<T: ContextCurrentState> Deref for Context<T> {
     type Target = RawContext<T>;
@@ -265,10 +254,12 @@ pub struct GLSpriteRender {
 }
 impl GLSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
+    // TODO: build a better error handling!!!!
     pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoop<T>, vsync: bool) -> (Window, Self) {
         let (context, window) = unsafe {
             glutin::ContextBuilder::new()
                 .with_vsync(vsync)
+                // .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4,5)))
                 .build_windowed(wb, event_loop)
                 .unwrap()
                 .split()
@@ -288,6 +279,11 @@ impl GLSpriteRender {
         //         println!("{}", string.to_str().unwrap());
         //     }
         // }
+        unsafe {
+            let string = gl::GetString(gl::VERSION);
+            let string = CStr::from_ptr(string as *const i8);
+            println!("OpenGL version: {}", string.to_str().unwrap());
+        }
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::Enable(gl::BLEND);
@@ -313,7 +309,7 @@ impl GLSpriteRender {
 
             // Check for shader compilation errors
             gl::GetShaderiv(vertex_shader, gl::COMPILE_STATUS, &mut success);
-            if success != i32::from(gl::TRUE) {
+            if success != gl::TRUE as i32 {
                 let mut len = 0;
                 gl::GetShaderInfoLog(
                     vertex_shader,
@@ -321,7 +317,7 @@ impl GLSpriteRender {
                     &mut len,
                     info_log.as_mut_ptr() as *mut GLchar,
                 );
-                println!(
+                panic!(
                     "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n{}",
                     str::from_utf8(&info_log[0..len as usize]).unwrap()
                 );
@@ -330,11 +326,35 @@ impl GLSpriteRender {
             // Fragment shader
             let fragment_shader = gl::CreateShader(gl::FRAGMENT_SHADER);
             let c_str_frag = CString::new(
-                (format!(
-                    "#version 330 core\n#define MAX_TEXTURE_IMAGE_UNITS {}",
-                    max_texture_units
-                ) + FRAGMENT_SHADER_SOURCE)
-                    .as_bytes(),
+                format!(
+                    r#"
+#version 330 core
+#define MAX_TEXTURE_IMAGE_UNITS {MAX_TEXTURE_IMAGE_UNITS}
+out vec4 FragColor;
+
+in vec4 color;
+in vec2 TexCoord;
+flat in int TextureIndex;
+
+uniform sampler2D text[MAX_TEXTURE_IMAGE_UNITS];
+
+void main()
+{{
+    vec4 textureColor;
+    {textureColor} // textureColor = texture(text[TextureIndex], TexCoord);
+    if (textureColor.a == 0.0 || color.a == 0.0) {{
+        discard;
+    }}
+    FragColor = color*textureColor;
+}}
+"#,
+                    MAX_TEXTURE_IMAGE_UNITS = max_texture_units,
+                    textureColor = (0..max_texture_units)
+                        .map(|i| format!("if (TextureIndex == {i}) textureColor = texture(text[{i}], TexCoord); \nelse ", i = i))
+                        .chain(std::iter::once("textureColor = vec4(0.0);".to_string()))
+                        .fold(String::new(), |a, b| a + &b)
+                )
+                .as_bytes(),
             )
             .unwrap();
 
@@ -351,7 +371,7 @@ impl GLSpriteRender {
                     &mut len,
                     info_log.as_mut_ptr() as *mut GLchar,
                 );
-                println!(
+                panic!(
                     "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n{}",
                     str::from_utf8(&info_log[0..len as usize]).unwrap()
                 );
@@ -372,7 +392,7 @@ impl GLSpriteRender {
                     ptr::null_mut(),
                     info_log.as_mut_ptr() as *mut GLchar,
                 );
-                println!(
+                panic!(
                     "ERROR::SHADER::PROGRAM::COMPILATION_FAILED\n{}",
                     &String::from_utf8_lossy(&info_log)
                 );
@@ -602,6 +622,18 @@ impl SpriteRender for GLSpriteRender {
             unsafe { Self::create_vao(self.vertex_buffer, self.instance_buffer) };
         window
     }
+
+    fn remove_window(&mut self, window: &Window) {
+        let mut context = self.contexts.remove(&window.id()).flatten();
+        if let Some((id, _)) = self.current_context.as_mut() {
+            if *id == window.id() {
+                unsafe {
+                    context = Some(self.current_context.take().unwrap().1.make_not_current());
+                }
+            }
+        }
+    }
+
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
