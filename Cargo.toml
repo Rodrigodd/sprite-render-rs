@@ -8,17 +8,17 @@ edition = "2018"
 
 [features]
 
-opengl = ["glutin", "gl", "winit"]
+opengl = ["glutin", "gl"]
 webgl = ["winit/web-sys"]
 
 [dependencies]
 
-cfg-if = "0.1"
-memoffset = "0.5"
-winit = { version = "0.22", optional = true }
+cfg-if = "1"
+memoffset = "0.6"
+winit = "0.24"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-glutin = { version = "0.24", optional = true }
+glutin = { version = "0.26", optional = true }
 gl = { version = "0.14", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -42,6 +42,6 @@ features = [
 
 [dev-dependencies]
 
-winit = "0.22"
-rand = "0.7"
+winit = "0.24"
+rand = "0.8"
 image = "0.23"

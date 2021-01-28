@@ -632,6 +632,7 @@ impl SpriteRender for GLSpriteRender {
                 }
             }
         }
+        drop(context);
     }
 
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
