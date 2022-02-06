@@ -20,8 +20,9 @@ pub trait Renderer {
 pub trait SpriteRender {
     fn add_window<T: 'static>(&mut self, window_builder: WindowBuilder, event_loop: &EventLoopWindowTarget<T>) -> Window;
     fn remove_window(&mut self, window: &Window);
-    /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
-    /// Pixel art don't use linear filter.
+    /// Load a Texture in the GPU. The texture data must be RGBA, and therefore need have a length
+    /// of width * height * 4. if linear_filter is true, the texture will be sampled with linear
+    /// filter applied.  Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32;
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>);
     fn resize_texture(&mut self, width: u32, height: u32, texture: u32, data: &[u8]);

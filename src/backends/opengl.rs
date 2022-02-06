@@ -1,7 +1,7 @@
 use gl::types::*;
 use glutin::{
     dpi::PhysicalSize,
-    event_loop::{EventLoop, EventLoopWindowTarget},
+    event_loop::{EventLoopWindowTarget},
     window::Window,
     window::{WindowBuilder, WindowId},
     ContextCurrentState, NotCurrent, PossiblyCurrent, RawContext,
@@ -255,7 +255,7 @@ pub struct GLSpriteRender {
 impl GLSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     // TODO: build a better error handling!!!!
-    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoop<T>, vsync: bool) -> (Window, Self) {
+    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoopWindowTarget<T>, vsync: bool) -> (Window, Self) {
         let (context, window) = unsafe {
             glutin::ContextBuilder::new()
                 .with_vsync(vsync)

@@ -15,10 +15,10 @@ webgl = ["winit/web-sys"]
 
 cfg-if = "1"
 memoffset = "0.6"
-winit = "0.24"
+winit = "0.26"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-glutin = { version = "0.26", optional = true }
+glutin = { version = "0.28", optional = true }
 gl = { version = "0.14", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -42,6 +42,5 @@ features = [
 
 [dev-dependencies]
 
-winit = "0.24"
 rand = "0.8"
 image = "0.23"
