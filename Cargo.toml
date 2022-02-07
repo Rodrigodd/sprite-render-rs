@@ -20,11 +20,8 @@ raw-window-handle = "0.3.4"
 log = "0.4.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-raw-gl-context = { version = "0.1.2", optional = true }
+raw-gl-context = { path = "../raw-gl-context", optional = true }
 gl = { version = "0.14", optional = true }
-
-[patch.crates-io]
-raw-gl-context = { path = "../raw-gl-context" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
