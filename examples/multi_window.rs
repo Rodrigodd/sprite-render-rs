@@ -1,14 +1,14 @@
-use rand::{Rng, RngCore};
+use rand::Rng;
 use sprite_render::{Camera, SpriteInstance, SpriteRender};
 use std::{collections::HashMap, fmt::Error, time::Instant};
 use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
+    dpi::{LogicalSize, PhysicalPosition},
     event::{
         ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, VirtualKeyCode,
         WindowEvent,
     },
     event_loop::EventLoop,
-    window::{WindowBuilder, Window},
+    window::{Window, WindowBuilder},
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -52,7 +52,7 @@ impl std::fmt::Debug for Scene {
 }
 impl Scene {
     fn new(rng: &mut impl Rng, fruit_texture: u32, jelly_texture: u32, window: Window) -> Self {
-        let mut camera = Camera::new(window.inner_size().width, window.inner_size().height, 2.0);
+        let camera = Camera::new(window.inner_size().width, window.inner_size().height, 2.0);
         let mut instances = vec![SpriteInstance::default(); 16384].into_boxed_slice();
         let sprite_size = 0.2;
         for i in (0..instances.len()).rev() {
@@ -66,8 +66,8 @@ impl Scene {
             ];
 
             instances[i] = SpriteInstance::new(
-                rng.gen_range(-1.0, 1.0),
-                rng.gen_range(-1.0, 1.0),
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0..1.0),
                 sprite_size,
                 sprite_size,
                 if rng.gen() {
@@ -97,31 +97,34 @@ impl Scene {
 }
 
 fn main() {
+    env_logger::init();
+
     let event_loop = EventLoop::new();
-    let wb = WindowBuilder::new()
+    let window = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(LogicalSize::new(800.0, 400.0));
+        .with_inner_size(LogicalSize::new(800.0, 400.0))
+        .build(&event_loop)
+        .unwrap();
 
     // create the SpriteRender
-    let (window, mut render) = {
+    let mut render = {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
-                let (window, render) = sprite_render::GLSpriteRender::new(wb, &event_loop, true);
-                (window, render)
+                sprite_render::GLSpriteRender::new(&window, true).unwrap_or_else(|x| panic!("{}", x))
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
-                let (window, render) = sprite_render::WebGLSpriteRender::new(wb, &event_loop);
-                (window, render)
+                sprite_render::WebGLSpriteRender::new(&window).unwrap();
             } else {
-                (wb.build(&event_loop).unwrap(),  ())
+                ()
             }
         }
     };
 
-    let wb = WindowBuilder::new()
+    let window_2 = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(LogicalSize::new(800.0, 400.0));
-    let window_2 = render.add_window(wb, &event_loop);
-
+        .with_inner_size(LogicalSize::new(800.0, 400.0))
+        .build(&event_loop)
+        .unwrap();
+    render.add_window(&window_2);
     let fruit_texture = {
         let image = image::open("examples/fruits.png")
             .expect("File not Found!")
@@ -151,7 +154,6 @@ fn main() {
     let mut change_clock = Instant::now();
     let mut change_frame = 0;
     let mut frame_count = 0;
-    let mut fps = 60.0;
 
     let mut scenes = HashMap::new();
     scenes.insert(
@@ -179,7 +181,7 @@ fn main() {
                             change_clock = Instant::now();
                             change_frame = frame_count;
                         }
-                        MouseScrollDelta::PixelDelta(LogicalPosition{ y, ..}) => {
+                        MouseScrollDelta::PixelDelta(PhysicalPosition{ y, ..}) => {
                             scene.view_size *= 2.0f32.powf(-y as f32/3.0);
                             scene.camera.set_height(scene.view_size);
                             change_clock = Instant::now();

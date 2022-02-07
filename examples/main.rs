@@ -1,7 +1,7 @@
 use sprite_render::{Camera, SpriteInstance, SpriteRender};
 
 use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
+    dpi::{LogicalSize, PhysicalPosition},
     event::{
         ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, VirtualKeyCode,
         WindowEvent,
@@ -21,22 +21,23 @@ mod wasm {
 }
 
 fn main() {
+    env_logger::init();
+
     let event_loop = EventLoop::new();
-    let wb = WindowBuilder::new()
+    let window = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(LogicalSize::new(800.0, 400.0));
+        .with_inner_size(LogicalSize::new(800.0, 400.0))
+        .build(&event_loop).unwrap();
 
     // create the SpriteRender
-    let (window, mut render) = {
+    let mut render = {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
-                let (window, render) = sprite_render::GLSpriteRender::new(wb, &event_loop, true);
-                (window, render)
+                sprite_render::GLSpriteRender::new(&window, true).unwrap_or_else(|x| panic!("{}", x))
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
-                let (window, render) = sprite_render::WebGLSpriteRender::new(wb, &event_loop);
-                (window, render)
+                sprite_render::WebGLSpriteRender::new(&window).unwrap();
             } else {
-                (wb.build(&event_loop).unwrap(),  ())
+                ()
             }
         }
     };
@@ -83,8 +84,8 @@ fn main() {
         ];
 
         instances[i] = SpriteInstance::new(
-            rng.gen_range(-1.0, 1.0),
-            rng.gen_range(-1.0, 1.0),
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-1.0..1.0),
             sprite_size,
             sprite_size,
             if rng.gen() {
@@ -108,7 +109,6 @@ fn main() {
     let mut do_rotation = false;
     let mut view_size = 2.0;
     let mut dragging = false;
-    let mut last_cursor_pos = PhysicalPosition { x: 0.0f32, y: 0.0 };
     let mut cursor_pos = PhysicalPosition { x: 0.0f32, y: 0.0 };
 
     // let mut frame_clock = Instant::now();
@@ -126,7 +126,7 @@ fn main() {
                             change_clock = Instant::now();
                             change_frame = frame_count;
                         }
-                        MouseScrollDelta::PixelDelta(LogicalPosition{ y, ..}) => {
+                        MouseScrollDelta::PixelDelta(PhysicalPosition{ y, ..}) => {
                             view_size *= 2.0f32.powf(-y as f32/3.0);
                             camera.set_height(view_size);
                             change_clock = Instant::now();
@@ -137,7 +137,7 @@ fn main() {
                         dragging = state == ElementState::Pressed;
                     },
                     WindowEvent::CursorMoved { position: PhysicalPosition { x, y }, .. } => {
-                        last_cursor_pos = cursor_pos;
+                        let last_cursor_pos = cursor_pos;
                         cursor_pos.x = x as f32;
                         cursor_pos.y = y as f32;
                         if dragging {

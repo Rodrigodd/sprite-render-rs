@@ -1,17 +1,13 @@
 use gl::types::*;
-use glutin::{
-    dpi::PhysicalSize,
-    event_loop::{EventLoopWindowTarget},
-    window::Window,
-    window::{WindowBuilder, WindowId},
-    ContextCurrentState, NotCurrent, PossiblyCurrent, RawContext,
-};
+use raw_gl_context::{GlConfig, GlContext};
 use std::ffi::{CStr, CString};
+use std::marker::PhantomData;
 use std::mem;
 use std::os::raw::c_void;
 use std::ptr;
 use std::str;
 use std::{collections::HashMap, ops::Deref};
+use winit::window::{Window, WindowId};
 
 use crate::common::*;
 use crate::{Renderer, SpriteRender};
@@ -72,7 +68,7 @@ unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
             _ => "unknown GL error code",
         };
 
-        println!("[{}:{:4}] {}: {}", file, line, label, error);
+        log::error!("[{}:{:4}] {}: {}", file, line, label, error);
 
         error_code = gl::GetError();
     }
@@ -95,6 +91,7 @@ pub struct GLRenderer<'a> {
 }
 impl<'a> Renderer for GLRenderer<'a> {
     fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer {
+        log::trace!("clear screen to [{:5.3}, {:5.3}, {:5.3}, {:5.3}]", color[0], color[1], color[2], color[3]);
         unsafe {
             gl::ClearColor(color[0], color[1], color[2], color[3]);
             gl::Clear(gl::COLOR_BUFFER_BIT);
@@ -107,6 +104,7 @@ impl<'a> Renderer for GLRenderer<'a> {
         camera: &mut Camera,
         sprites: &[SpriteInstance],
     ) -> &mut dyn Renderer {
+        log::trace!("draw {} sprites", sprites.len());
         if sprites.is_empty() {
             return self;
         }
@@ -115,9 +113,11 @@ impl<'a> Renderer for GLRenderer<'a> {
         }
 
         unsafe {
+            log::debug!("bind buffer {:x}", self.render.instance_buffer);
             // copy sprites into gpu memory
             gl::BindBuffer(gl::ARRAY_BUFFER, self.render.instance_buffer);
             loop {
+                log::debug!("map buffer range");
                 let mut cursor = gl::MapBufferRange(
                     gl::ARRAY_BUFFER,
                     0,
@@ -156,6 +156,7 @@ impl<'a> Renderer for GLRenderer<'a> {
                     cursor = cursor.add(INSTANCE_STRIDE as usize);
                 }
 
+            log::debug!("unmap buffer");
                 let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
                 b = gl::NO_ERROR
                     != gl_check_error!(
@@ -168,22 +169,29 @@ impl<'a> Renderer for GLRenderer<'a> {
                 }
             }
             self.render.texture_unit_map.clear();
+            log::debug!("unbind buffer {:x}", self.render.instance_buffer);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             // render
+            log::debug!("bind program");
             gl::UseProgram(self.render.shader_program);
             let text_units = (0..self.render.max_texture_units).collect::<Vec<i32>>();
+            log::debug!("write uniform");
             gl::Uniform1iv(
                 get_uniform_location(self.render.shader_program, "text"),
                 16,
                 text_units.as_ptr(),
             );
+            log::debug!("write uniform");
             gl::UniformMatrix3fv(
                 get_uniform_location(self.render.shader_program, "view"),
                 1,
                 gl::FALSE,
                 camera.view().as_ptr(),
             );
+            log::debug!("bind vertex");
             gl::BindVertexArray(self.render.vao());
+            gl_check_error!("draw arrays instanced");
+            log::debug!("draw");
             gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
 
             gl_check_error!("end frame");
@@ -192,55 +200,67 @@ impl<'a> Renderer for GLRenderer<'a> {
     }
 
     fn finish(&mut self) {
+        log::trace!("finish");
         self.render
             .current_context
             .as_ref()
             .unwrap()
             .1
-            .swap_buffers()
-            .unwrap();
+            .swap_buffers();
     }
 }
 
+trait ContextCurrentState {}
+struct NotCurrent;
+struct PossiblyCurrent;
+impl ContextCurrentState for NotCurrent {}
+impl ContextCurrentState for PossiblyCurrent {}
+
 struct Context<T: ContextCurrentState> {
-    context: RawContext<T>,
+    context: GlContext,
     vao: u32,
+    _p: PhantomData<T>,
 }
 impl Context<NotCurrent> {
     unsafe fn make_current(self) -> Context<PossiblyCurrent> {
-        let Self { context, vao } = self;
+        let Self { context, vao, .. } = self;
+        context.make_current();
         Context {
-            context: context.make_current().unwrap(),
+            context,
             vao,
+            _p: Default::default(),
         }
     }
 }
 impl Context<PossiblyCurrent> {
     unsafe fn treat_as_not_current(self) -> Context<NotCurrent> {
-        let Self { context, vao } = self;
+        let Self { context, vao, .. } = self;
         Context {
-            context: context.treat_as_not_current(),
+            context,
             vao,
+            _p: Default::default(),
         }
     }
 
     unsafe fn make_not_current(self) -> Context<NotCurrent> {
-        let Self { context, vao } = self;
+        let Self { context, vao, .. } = self;
+        context.make_not_current();
         Context {
-            context: context.make_not_current().unwrap(),
+            context,
             vao,
+            _p: Default::default(),
         }
     }
 }
 impl<T: ContextCurrentState> Deref for Context<T> {
-    type Target = RawContext<T>;
+    type Target = GlContext;
     fn deref(&self) -> &Self::Target {
         &self.context
     }
 }
 
 pub struct GLSpriteRender {
-    // context: glutin::RawContext<glutin::PossiblyCurrent>,
+    vsync: bool,
     contexts: HashMap<WindowId, Option<Context<NotCurrent>>>,
     current_context: Option<(WindowId, Context<PossiblyCurrent>)>,
     shader_program: u32,
@@ -255,17 +275,16 @@ pub struct GLSpriteRender {
 impl GLSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     // TODO: build a better error handling!!!!
-    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoopWindowTarget<T>, vsync: bool) -> (Window, Self) {
-        let (context, window) = unsafe {
-            glutin::ContextBuilder::new()
-                .with_vsync(vsync)
-                // .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGl, (4,5)))
-                .build_windowed(wb, event_loop)
-                .unwrap()
-                .split()
+    pub fn new(window: &Window, vsync: bool) -> Result<Self, String> {
+        let config = GlConfig {
+            vsync,
+            ..Default::default()
         };
-
-        let context = unsafe { context.make_current().unwrap() };
+        let context = unsafe {
+            let context = GlContext::create(window, config).map_err(|x| format!("{:?}", x))?;
+            context.make_current();
+            context
+        };
 
         gl::load_with(|symbol| context.get_proc_address(symbol) as *const _);
 
@@ -282,7 +301,7 @@ impl GLSpriteRender {
         unsafe {
             let string = gl::GetString(gl::VERSION);
             let string = CStr::from_ptr(string as *const i8);
-            println!("OpenGL version: {}", string.to_str().unwrap());
+            log::info!("OpenGL version: {}", string.to_str().unwrap());
         }
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
@@ -293,7 +312,7 @@ impl GLSpriteRender {
         unsafe {
             gl::GetIntegerv(gl::MAX_TEXTURE_IMAGE_UNITS, &mut max_texture_units);
         }
-        println!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
+        log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
         let (shader_program, vao, instance_buffer, vertex_buffer) = unsafe {
             // Setup shader compilation checks
@@ -429,12 +448,21 @@ void main()
         };
 
         let mut contexts = HashMap::new();
-        contexts.insert(window.id(), None);
+        let window_id = window.id();
+        contexts.insert(window_id, None);
 
         let mut sprite_render = Self {
+            vsync,
             shader_program,
             contexts,
-            current_context: Some((window.id(), Context { context, vao })),
+            current_context: Some((
+                window_id,
+                Context {
+                    context,
+                    vao,
+                    _p: Default::default(),
+                },
+            )),
             vertex_buffer,
             instance_buffer,
             instance_buffer_size: 0,
@@ -445,7 +473,7 @@ void main()
         let size = window.inner_size();
         sprite_render.resize(window.id(), size.width, size.height);
 
-        (window, sprite_render)
+        Ok(sprite_render)
     }
 
     fn reallocate_instance_buffer(&mut self, size_need: usize) {
@@ -568,18 +596,18 @@ void main()
         vao
     }
 
-    fn set_current_context(&mut self, window: WindowId) {
-        let the_same = self
+    fn set_current_context(&mut self, window_id: WindowId) {
+        let already_current = self
             .current_context
             .as_ref()
-            .map_or(false, |x| x.0 == window);
-        if !the_same {
+            .map_or(false, |x| x.0 == window_id);
+        if !already_current {
             let previous_context = self.current_context.take();
             unsafe {
                 self.current_context = Some((
-                    window,
+                    window_id,
                     self.contexts
-                        .get_mut(&window)
+                        .get_mut(&window_id)
                         .unwrap()
                         .take()
                         .unwrap()
@@ -595,23 +623,32 @@ void main()
     }
 }
 impl SpriteRender for GLSpriteRender {
-    fn add_window<T: 'static>(
-        &mut self,
-        wb: WindowBuilder,
-        event_loop: &EventLoopWindowTarget<T>,
-    ) -> Window {
-        let (context, window) = unsafe {
-            glutin::ContextBuilder::new()
-                .with_shared_lists(&self.current_context.as_ref().unwrap().1)
-                .build_windowed(wb, event_loop)
-                .unwrap()
-                .split()
+    fn add_window(&mut self, window: &Window) {
+        if self.contexts.contains_key(&window.id()) {
+            log::warn!("Tried to add a window to SpriteRender twice");
+            return;
+        }
+
+        let config = GlConfig {
+            vsync: self.vsync,
+            share: Some(&self.current_context.as_ref().unwrap().1.context),
+            ..Default::default()
+        };
+        let context = unsafe {
+            GlContext::create(window, config).unwrap()
         };
 
-        self.contexts
-            .insert(window.id(), Some(Context { context, vao: 0 }));
+        let window_id = window.id();
+        self.contexts.insert(
+            window_id,
+            Some(Context {
+                context,
+                vao: 0,
+                _p: Default::default(),
+            }),
+        );
 
-        self.set_current_context(window.id());
+        self.set_current_context(window_id);
 
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
@@ -620,13 +657,12 @@ impl SpriteRender for GLSpriteRender {
 
         self.current_context.as_mut().unwrap().1.vao =
             unsafe { Self::create_vao(self.vertex_buffer, self.instance_buffer) };
-        window
     }
 
-    fn remove_window(&mut self, window: &Window) {
-        let mut context = self.contexts.remove(&window.id()).flatten();
+    fn remove_window(&mut self, window_id: WindowId) {
+        let mut context = self.contexts.remove(&window_id).flatten();
         if let Some((id, _)) = self.current_context.as_mut() {
-            if *id == window.id() {
+            if *id == window_id {
                 unsafe {
                     context = Some(self.current_context.take().unwrap().1.make_not_current());
                 }
@@ -730,13 +766,13 @@ impl SpriteRender for GLSpriteRender {
         Box::new(GLRenderer { render: self })
     }
 
-    fn resize(&mut self, window: WindowId, width: u32, height: u32) {
-        self.set_current_context(window);
-        self.current_context
-            .as_ref()
-            .unwrap()
-            .1
-            .resize(PhysicalSize::new(width, height));
+    fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
+        self.set_current_context(window_id);
+        // self.current_context
+        //     .as_ref()
+        //     .unwrap()
+        //     .1
+        //     .resize(PhysicalSize::new(width, height));
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
         }

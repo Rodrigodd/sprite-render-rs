@@ -3,6 +3,7 @@ mod common;
 
 pub use backends::*;
 pub use common::*;
+use raw_window_handle::HasRawWindowHandle;
 use winit::{event_loop::EventLoopWindowTarget, window::{Window, WindowBuilder, WindowId}};
 
 pub trait Renderer {
@@ -18,8 +19,8 @@ pub trait Renderer {
 }
 
 pub trait SpriteRender {
-    fn add_window<T: 'static>(&mut self, window_builder: WindowBuilder, event_loop: &EventLoopWindowTarget<T>) -> Window;
-    fn remove_window(&mut self, window: &Window);
+    fn add_window(&mut self, window: &Window);
+    fn remove_window(&mut self, window_id: WindowId);
     /// Load a Texture in the GPU. The texture data must be RGBA, and therefore need have a length
     /// of width * height * 4. if linear_filter is true, the texture will be sampled with linear
     /// filter applied.  Pixel art don't use linear filter.
@@ -40,10 +41,8 @@ impl Renderer for () {
 }
 
 impl SpriteRender for () {
-    fn add_window<T: 'static>(&mut self, window_builder: WindowBuilder, event_loop: &EventLoopWindowTarget<T>) -> Window {
-        window_builder.build(event_loop).unwrap()
-    }
-    fn remove_window(&mut self, _window: &Window) {}
+    fn add_window(&mut self, _window: &Window) {}
+    fn remove_window(&mut self, _window_id: WindowId) {}
 
     fn new_texture(&mut self, _: u32, _: u32, _: &[u8], _: bool) -> u32 {
         0
