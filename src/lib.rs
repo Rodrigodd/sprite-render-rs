@@ -3,8 +3,7 @@ mod common;
 
 pub use backends::*;
 pub use common::*;
-use raw_window_handle::HasRawWindowHandle;
-use winit::{event_loop::EventLoopWindowTarget, window::{Window, WindowBuilder, WindowId}};
+use winit::window::{Window, WindowId};
 
 pub trait Renderer {
     fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer;
