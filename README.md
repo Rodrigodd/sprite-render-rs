@@ -1,14 +1,12 @@
-## Todo:
+# Sprite Render
 
-- Remove winit (and other dependencies) with empty features
-- Add a set_top_left_position for the camera
-- make load texture be used with differents formats
-- make possible to recreate a texture with different size (and format?)
-- make a proper nonzero type for the textures...
-- split the sprites in diferrents draw calls when the number of texture is greater than MAX_TEXTURE_IMAGE_UNITS
-- 'clamp to edge' or 'repeat'?
-- fix ```main.rs``` example: 1 line scroll = 100 pixel scroll
+A rust crate for rendering textured rects, with multiple backends (only two flavors of OpenGL for now).
 
-### webgl
-
-- handle the limitation of ~~16384~~ 5400 sprites
+## Backends
+- [x] OpenGL 3.2
+- [x] WebGl
+- [ ] OpenGLES (for Android support)
+- [ ] Directx11? Directx12? (I have windows at least)
+- [ ] Vulkan? (My only device with vulkan support is a Android)
+- [ ] Metal? (I don't have a Apple device)
+- [ ] Wgpu? (I have write this to avoid the bloat of gfx-hal)
