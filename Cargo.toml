@@ -20,7 +20,8 @@ raw-window-handle = "0.3.4"
 log = "0.4.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-raw-gl-context = { path = "../raw-gl-context", optional = true }
+# raw-gl-context = { optional = true, path = "../raw-gl-context" }
+raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "c8159e9d25c86610c341c1a0e45beef28ad0520b" }
 gl = { version = "0.14", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
