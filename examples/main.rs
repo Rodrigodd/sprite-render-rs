@@ -53,7 +53,7 @@ fn main() {
         )
     };
     let jelly_texture = {
-        let image = image::open("examples/jelly.png")
+        let image = image::open("examples/Jelly.png")
             .expect("File not Found!")
             .to_rgba();
         render.new_texture(
