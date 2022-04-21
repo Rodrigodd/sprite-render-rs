@@ -231,9 +231,7 @@ pub struct WebGLSpriteRender {
 }
 impl WebGLSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
-    pub fn new<T>(wb: WindowBuilder, event_loop: &EventLoop<T>) -> (Window, Self) {
-        let window = wb.build(event_loop).unwrap();
-
+    pub fn new(window: &Window) -> Self {
         let canvas = window.canvas();
 
         let canvas: web_sys::HtmlCanvasElement =
@@ -353,7 +351,7 @@ impl WebGLSpriteRender {
         let size = window.inner_size();
         sprite_render.resize(window.id(), size.width, size.height);
 
-        (window, sprite_render)
+        sprite_render
     }
 
     fn compile_shader(
@@ -509,7 +507,10 @@ impl WebGLSpriteRender {
     }
 }
 impl SpriteRender for WebGLSpriteRender {
-    fn add_window<T: 'static>(&mut self, _: WindowBuilder, _: &EventLoopWindowTarget<T>) -> Window {
+    fn add_window(&mut self, _: &Window) {
+        unimplemented!("Multi window is not implemented in WebGL");
+    }
+    fn remove_window(&mut self, window_id: WindowId) {
         unimplemented!("Multi window is not implemented in WebGL");
     }
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
