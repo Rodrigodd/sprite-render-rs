@@ -714,16 +714,25 @@ impl SpriteRender for GLSpriteRender {
     }
 
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
+        let rect = sub_rect.unwrap_or({
+            let size = self
+                .textures
+                .iter()
+                .find(|(id, _, _)| *id == texture)
+                .unwrap();
+            [0, 0, size.1, size.2]
+        });
+        let expected_len = (rect[2] * rect[3] * 4) as usize;
+        assert!(
+            data.len() == expected_len,
+            "expected data length was {}x{}x4={}, but receive a data of length {}",
+            rect[2],
+            rect[3],
+            expected_len,
+            data.len()
+        );
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
-            let rect = sub_rect.unwrap_or({
-                let size = self
-                    .textures
-                    .iter()
-                    .find(|(id, _, _)| *id == texture)
-                    .unwrap();
-                [0, 0, size.1, size.2]
-            });
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
