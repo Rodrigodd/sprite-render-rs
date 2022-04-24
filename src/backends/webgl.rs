@@ -146,7 +146,7 @@ impl<'a> Renderer for WebGLRenderer<'a> {
                     );
                     self.render.context.bind_texture(
                         WebGlRenderingContext::TEXTURE_2D,
-                        Some(&self.render.textures[sprite.texture as usize - 1]),
+                        Some(&self.render.textures[sprite.texture as usize - 1].handle),
                     );
                     self.render
                         .texture_unit_map
@@ -217,10 +217,16 @@ impl<'a> Renderer for WebGLRenderer<'a> {
     fn finish(&mut self) {}
 }
 
+struct Texture {
+    handle: WebGlTexture,
+    width: u32,
+    height: u32,
+}
+
 pub struct WebGLSpriteRender {
     context: WebGlRenderingContext,
     shader_program: WebGlProgram,
-    textures: Vec<WebGlTexture>,
+    textures: Vec<Texture>,
     buffer: WebGlBuffer,
     indice_buffer: WebGlBuffer,
     /// Buffer size in number of sprites
@@ -562,16 +568,66 @@ impl SpriteRender for WebGLSpriteRender {
                 },
             )
             .unwrap();
-        self.textures.push(texture);
+        gl_check_error!(&self.context, "new_texture",);
+
+        self.textures.push(Texture {
+            handle: texture,
+            width,
+            height,
+        });
+
         self.textures.len() as u32
     }
 
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
-        todo!();
+        let rect = sub_rect.unwrap_or({
+            let texture = &self.textures[texture as usize - 1];
+            [0, 0, texture.width, texture.height]
+        });
+        assert!(data.len() == (rect[2] * rect[3] * 4) as usize);
+
+        self.context.bind_texture(
+            WebGlRenderingContext::TEXTURE_2D,
+            Some(&self.textures[texture as usize - 1].handle),
+        );
+        self.context
+            .tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
+                WebGlRenderingContext::TEXTURE_2D,
+                0,
+                rect[0] as i32,
+                rect[1] as i32,
+                rect[2] as i32,
+                rect[3] as i32,
+                WebGlRenderingContext::RGBA,
+                WebGlRenderingContext::UNSIGNED_BYTE,
+                Some(data),
+            );
+        gl_check_error!(&self.context, "update_texture",);
     }
 
     fn resize_texture(&mut self, width: u32, height: u32, texture: u32, data: &[u8]) {
-        todo!()
+        self.context.bind_texture(
+            WebGlRenderingContext::TEXTURE_2D,
+            Some(&self.textures[texture as usize - 1].handle),
+        );
+        self.context
+            .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                WebGlRenderingContext::TEXTURE_2D,
+                0,
+                WebGlRenderingContext::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                WebGlRenderingContext::RGBA,
+                WebGlRenderingContext::UNSIGNED_BYTE,
+                if data.len() as u32 >= width * height * 4 {
+                    Some(data)
+                } else {
+                    None
+                },
+            )
+            .unwrap();
+        gl_check_error!(&self.context, "resize_texture",);
     }
 
     fn render<'a>(&'a mut self, _: WindowId) -> Box<dyn Renderer + 'a> {
