@@ -91,7 +91,13 @@ pub struct GLRenderer<'a> {
 }
 impl<'a> Renderer for GLRenderer<'a> {
     fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer {
-        log::trace!("clear screen to [{:5.3}, {:5.3}, {:5.3}, {:5.3}]", color[0], color[1], color[2], color[3]);
+        log::trace!(
+            "clear screen to [{:5.3}, {:5.3}, {:5.3}, {:5.3}]",
+            color[0],
+            color[1],
+            color[2],
+            color[3]
+        );
         unsafe {
             gl::ClearColor(color[0], color[1], color[2], color[3]);
             gl::Clear(gl::COLOR_BUFFER_BIT);
@@ -157,7 +163,7 @@ impl<'a> Renderer for GLRenderer<'a> {
                     cursor = cursor.add(INSTANCE_STRIDE as usize);
                 }
 
-            log::debug!("unmap buffer");
+                log::debug!("unmap buffer");
                 let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
                 b = gl::NO_ERROR
                     != gl_check_error!(
@@ -635,9 +641,7 @@ impl SpriteRender for GLSpriteRender {
             share: Some(&self.current_context.as_ref().unwrap().1.context),
             ..Default::default()
         };
-        let context = unsafe {
-            GlContext::create(window, config).unwrap()
-        };
+        let context = unsafe { GlContext::create(window, config).unwrap() };
 
         let window_id = window.id();
         self.contexts.insert(

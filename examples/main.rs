@@ -27,7 +27,8 @@ fn main() {
     let window = WindowBuilder::new()
         .with_title("Hello world!")
         .with_inner_size(LogicalSize::new(800.0, 400.0))
-        .build(&event_loop).unwrap();
+        .build(&event_loop)
+        .unwrap();
 
     // create the SpriteRender
     let mut render = {
