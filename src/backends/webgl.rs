@@ -125,10 +125,12 @@ impl<'a> Renderer for WebGLRenderer<'a> {
         if sprites.len() == 0 {
             return self;
         }
+
         if sprites.len() > self.render.buffer_size as usize {
             self.render.reallocate_instance_buffer(sprites.len());
         }
 
+        self.render.texture_unit_map.clear();
         unsafe {
             let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
             for sprite in sprites {
@@ -519,6 +521,7 @@ impl SpriteRender for WebGLSpriteRender {
     fn remove_window(&mut self, window_id: WindowId) {
         unimplemented!("Multi window is not implemented in WebGL");
     }
+
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {

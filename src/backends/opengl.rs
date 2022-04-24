@@ -112,6 +112,7 @@ impl<'a> Renderer for GLRenderer<'a> {
             self.render.reallocate_instance_buffer(sprites.len());
         }
 
+        self.render.texture_unit_map.clear();
         unsafe {
             log::debug!("bind buffer {:x}", self.render.instance_buffer);
             // copy sprites into gpu memory
