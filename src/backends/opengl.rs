@@ -1,4 +1,3 @@
-use gl::types::*;
 use raw_gl_context::{GlConfig, GlContext};
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
@@ -11,6 +10,11 @@ use winit::window::{Window, WindowId};
 
 use crate::common::*;
 use crate::{Renderer, SpriteRender};
+
+mod gl {
+    include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
+}
+use gl::types::*;
 
 const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
 const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
