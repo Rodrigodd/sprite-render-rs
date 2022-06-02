@@ -630,6 +630,14 @@ void main()
                     *self.contexts.get_mut(&window).unwrap() = Some(context.treat_as_not_current());
                 }
             }
+        } else {
+            // Make the current context current again to be sure that it is. If another
+            // GLSpriteRender was dropped, the current context could be NULL.
+            unsafe {
+                self.current_context
+                    .as_mut()
+                    .map(|(_, context)| context.make_current());
+            }
         }
     }
 }
