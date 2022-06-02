@@ -317,4 +317,20 @@ impl Camera {
         self.rotation = (self.rotation + radians).rem_euclid(2.0 * PI);
         self.dirty = true;
     }
+
+    #[inline]
+    /// Scale the view size by some scalar.
+    ///
+    /// A value of 1.0 will keep the size, and a value greater than 1.0 will zoom out the camera.
+    /// The position of the center of the camera in world space is preserved.
+    pub fn scale_view(&mut self, scalar: f32) {
+        let h = self.height();
+        self.set_height(h * scalar);
+    }
+
+    #[inline]
+    /// The `(width, height)` of the screen, in pixels.
+    pub fn screen_size(&self) -> (u32, u32) {
+        self.screen_size
+    }
 }
