@@ -337,16 +337,6 @@ impl GLSpriteRender {
             gl::DebugMessageCallback(Some(callback), ptr::null());
         }
 
-        // unsafe {
-        //     let mut num_extensions = 0;
-        //     gl::GetIntegerv(gl::NUM_EXTENSIONS, &mut num_extensions);
-        //     println!("extensions({}):", num_extensions);
-        //     for i in 0..num_extensions as u32 {
-        //         let string = gl::GetStringi(gl::EXTENSIONS, i);
-        //         let string = CStr::from_ptr(string as *const i8);
-        //         println!("{}", string.to_str().unwrap());
-        //     }
-        // }
         unsafe {
             let string = gl::GetString(gl::VERSION);
             let string = CStr::from_ptr(string as *const c_char);
@@ -843,11 +833,6 @@ impl SpriteRender for GLSpriteRender {
 
     fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
         self.set_current_context(window_id);
-        // self.current_context
-        //     .as_ref()
-        //     .unwrap()
-        //     .1
-        //     .resize(PhysicalSize::new(width, height));
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
             gl_check_error!("resize");
