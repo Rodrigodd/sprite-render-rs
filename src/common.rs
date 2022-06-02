@@ -154,7 +154,6 @@ pub struct Camera {
     rotation: f32,
 
     screen_size: (u32, u32),
-    #[cfg(any(feature = "opengl", all(feature = "webgl", target_arch = "wasm32")))]
     view_matrix: [f32; 9],
     dirty: bool,
 }
@@ -169,13 +168,12 @@ impl Camera {
             height,
             rotation: 0.0,
             screen_size: (screen_width, screen_height),
-            #[cfg(any(feature = "opengl", all(feature = "webgl", target_arch = "wasm32")))]
             view_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             dirty: true,
         }
     }
 
-    #[cfg(any(feature = "opengl", all(feature = "webgl", target_arch = "wasm32")))]
+    #[allow(dead_code)]
     pub(crate) fn view(&mut self) -> &[f32; 9] {
         if self.dirty {
             self.dirty = false;
