@@ -2,7 +2,7 @@ use raw_gl_context::{GlConfig, GlContext};
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
 use std::mem;
-use std::os::raw::c_void;
+use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::str;
 use std::{collections::HashMap, ops::Deref};
@@ -311,7 +311,7 @@ impl GLSpriteRender {
         // }
         unsafe {
             let string = gl::GetString(gl::VERSION);
-            let string = CStr::from_ptr(string as *const i8);
+            let string = CStr::from_ptr(string as *const c_char);
             log::info!("OpenGL version: {}", string.to_str().unwrap());
         }
         unsafe {
