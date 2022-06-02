@@ -202,13 +202,12 @@ impl Camera {
         &self.view_matrix
     }
 
-    /// Update the screen ratio when the screen size change.
-    /// If a resize happen, and this function not called, the view will be distorted.
+    /// Update the screen ratio when the screen size change. If a resize happen, and this function
+    /// is not called, the view will be distorted.
     ///
-    /// The new smaller view size will be equal to the last smaller view size,
-    /// the other view size change to keep proportion.
-    /// If you want another behaviour, change the view size using
-    /// ```set_width```, ```set_height``` or ```set_minor_size``` function.
+    /// The smaller dimension of the view will be preserved, while the other dimension will change
+    /// to keep the proportion. If you need another behaviour, use the functions [`set_width`],
+    /// [`set_height`] or [`set_minor_size`], after calling this one.
     pub fn resize(&mut self, screen_width: u32, screen_height: u32) {
         self.screen_size = (screen_width, screen_height);
         let side = self.width.min(self.height);
@@ -247,8 +246,8 @@ impl Camera {
         }
     }
 
-    /// Set the view height or the view width, whichever is the smaller, keeping the screen proportion
-    /// by calculating the other dimension.
+    /// Set the view height or the view width, whichever is the smallest, keeping the screen
+    /// proportion by calculating the other dimension.
     pub fn set_minor_size(&mut self, size: f32) {
         if self.screen_size.0 > self.screen_size.1 {
             self.set_height(size);
@@ -257,7 +256,7 @@ impl Camera {
         }
     }
 
-    /// Get the view width
+    /// Get the view width, in world space.
     pub fn width(&self) -> f32 {
         self.width
     }
@@ -270,7 +269,7 @@ impl Camera {
         self.dirty = true;
     }
 
-    /// Get the view width
+    /// Get the view height, in world space.
     pub fn height(&self) -> f32 {
         self.height
     }
