@@ -58,8 +58,10 @@ void main()
 }
 "#;
 
-unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
+unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> bool {
     let mut error_code = gl::GetError();
+    let mut count = 0;
+    log::debug!("run {}:{}", label, line);
     while error_code != gl::NO_ERROR {
         let error = match error_code {
             gl::INVALID_ENUM => "INVALID_ENUM",
@@ -75,8 +77,12 @@ unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
         log::error!("[{}:{:4}] {}: {}", file, line, label, error);
 
         error_code = gl::GetError();
+        count += 1;
+        if count > 20 {
+            panic!("glGetError repeat 20 times already!");
+        }
     }
-    error_code
+    count > 0
 }
 
 macro_rules! gl_check_error {
@@ -104,7 +110,9 @@ impl<'a> Renderer for GLRenderer<'a> {
         );
         unsafe {
             gl::ClearColor(color[0], color[1], color[2], color[3]);
+            gl_check_error!("glClearColor");
             gl::Clear(gl::COLOR_BUFFER_BIT);
+            gl_check_error!("glClear BUFFER BIT");
         }
         self
     }
@@ -127,6 +135,7 @@ impl<'a> Renderer for GLRenderer<'a> {
             log::debug!("bind buffer {:x}", self.render.instance_buffer);
             // copy sprites into gpu memory
             gl::BindBuffer(gl::ARRAY_BUFFER, self.render.instance_buffer);
+            gl_check_error!("glBindBuffer");
             loop {
                 log::debug!("map buffer range");
                 let mut cursor = gl::MapBufferRange(
@@ -135,6 +144,7 @@ impl<'a> Renderer for GLRenderer<'a> {
                     (sprites.len() * INSTANCE_STRIDE as usize) as GLsizeiptr,
                     gl::MAP_WRITE_BIT,
                 ) as *mut u8;
+                gl_check_error!("glMapBufferRange");
 
                 for sprite in sprites {
                     let texture_unit = if let Some(t) =
@@ -148,7 +158,9 @@ impl<'a> Renderer for GLRenderer<'a> {
                             unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
                         }
                         gl::ActiveTexture(gl::TEXTURE0 + self.render.texture_unit_map.len() as u32);
+                        gl_check_error!("glActiveTexture");
                         gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
+                        gl_check_error!("glBindTexture");
                         self.render
                             .texture_unit_map
                             .insert(sprite.texture, self.render.texture_unit_map.len() as u32);
@@ -169,12 +181,11 @@ impl<'a> Renderer for GLRenderer<'a> {
 
                 log::debug!("unmap buffer");
                 let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
-                b = gl::NO_ERROR
-                    != gl_check_error!(
-                        "instance_buffer_write({})",
-                        (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr
-                    )
-                    || b;
+                gl_check_error!("glUnmapBuffer");
+                b = gl_check_error!(
+                    "instance_buffer_write({})",
+                    (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr
+                ) || b;
                 if b {
                     break;
                 }
@@ -298,6 +309,33 @@ impl GLSpriteRender {
         };
 
         gl::load_with(|symbol| context.get_proc_address(symbol) as *const _);
+
+        unsafe {
+            extern "system" fn callback(
+                _source: GLenum,
+                gltype: GLenum,
+                _id: GLuint,
+                severity: GLenum,
+                _length: GLsizei,
+                message: *const GLchar,
+                _: *mut c_void,
+            ) {
+                let error = if gltype == gl::DEBUG_TYPE_ERROR {
+                    "** GL ERROR **"
+                } else {
+                    ""
+                };
+                log::error!(
+                    "GL CALLBACK: {} type = 0x{:x}, severity = 0x{:x}, message = {}",
+                    error,
+                    gltype,
+                    severity,
+                    unsafe { CStr::from_ptr(message).to_string_lossy() }
+                )
+            }
+            gl::Enable(gl::DEBUG_OUTPUT);
+            gl::DebugMessageCallback(Some(callback), ptr::null());
+        }
 
         // unsafe {
         //     let mut num_extensions = 0;
@@ -458,6 +496,12 @@ void main()
             (shader_program, vao, instance_buffer, vertex_buffer)
         };
 
+        unsafe {
+            if gl_check_error!("SpriteRender::new") {
+                return Err("opengl error on creation".to_string());
+            }
+        }
+
         let mut contexts = HashMap::new();
         let window_id = window.id();
         contexts.insert(window_id, None);
@@ -488,6 +532,7 @@ void main()
     }
 
     fn reallocate_instance_buffer(&mut self, size_need: usize) {
+
         let new_size = size_need.next_power_of_two();
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
@@ -725,6 +770,7 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data_ptr,
             );
+            gl_check_error!("new_texure");
             self.textures.push((texture, width, height));
             texture
         }
@@ -750,6 +796,7 @@ impl SpriteRender for GLSpriteRender {
         );
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
+            gl_check_error!("BindTexture");
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -761,6 +808,7 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data.as_ptr() as *const c_void,
             );
+            gl_check_error!("update_texure");
         }
     }
 
@@ -784,6 +832,7 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data_ptr,
             );
+            gl_check_error!("resize_texure");
         }
     }
 
@@ -801,6 +850,7 @@ impl SpriteRender for GLSpriteRender {
         //     .resize(PhysicalSize::new(width, height));
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
+            gl_check_error!("resize");
         }
     }
 }
