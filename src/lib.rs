@@ -25,7 +25,7 @@ pub trait SpriteRender {
     /// filter applied.  Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32;
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>);
-    fn resize_texture(&mut self, width: u32, height: u32, texture: u32, data: &[u8]);
+    fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]);
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a>;
     fn resize(&mut self, window: WindowId, width: u32, height: u32);
 }

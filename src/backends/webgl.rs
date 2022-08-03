@@ -608,7 +608,7 @@ impl SpriteRender for WebGLSpriteRender {
         gl_check_error!(&self.context, "update_texture",);
     }
 
-    fn resize_texture(&mut self, width: u32, height: u32, texture: u32, data: &[u8]) {
+    fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]) {
         self.context.bind_texture(
             WebGlRenderingContext::TEXTURE_2D,
             Some(&self.textures[texture as usize - 1].handle),
