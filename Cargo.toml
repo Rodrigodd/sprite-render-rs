@@ -21,13 +21,13 @@ webgl = []
 
 cfg-if = "1"
 memoffset = "0.6"
-winit = "0.26"
-raw-window-handle = "0.3.4"
+winit = "0.27.2"
+raw-window-handle = "0.5.0"
 log = "0.4.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # raw-gl-context = { optional = true, path = "../raw-gl-context" }
-raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "ff460baf8be677021788015ed23b73a7cfd1ce8a" }
+raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "26a6f473acb7131d074f985369c67f2c5ea0671b" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.build-dependencies]
 gl_generator = { version = "0.14", optional = true }
