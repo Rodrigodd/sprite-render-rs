@@ -28,7 +28,7 @@ log = "0.4.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # raw-gl-context = { optional = true, path = "../raw-gl-context" }
-raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "b8a41f021217eba90e3b95585974afe3993269f3" }
+raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "2ab0454550686ded3c6ad16b9619aa4c89c5132d" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.build-dependencies]
 gl_generator = { version = "0.14", optional = true }
