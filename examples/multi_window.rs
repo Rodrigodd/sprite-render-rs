@@ -11,16 +11,6 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use wasm_bindgen::prelude::*;
-
-    #[wasm_bindgen(start)]
-    pub fn run() {
-        super::main();
-    }
-}
-
 struct Scene {
     instances: Box<[SpriteInstance]>,
     window: Window,
@@ -111,8 +101,6 @@ fn main() {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
                 sprite_render::GLSpriteRender::new(&window, true).unwrap_or_else(|x| panic!("{}", x))
-            } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
-                sprite_render::WebGLSpriteRender::new(&window).unwrap()
             } else {
                 ()
             }
