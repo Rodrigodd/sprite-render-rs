@@ -1,3 +1,5 @@
 /target
 Cargo.lock
 .vscode/*
+dist/main.js
+dist/main_bg.wasm

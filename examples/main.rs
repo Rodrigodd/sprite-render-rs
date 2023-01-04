@@ -12,15 +12,14 @@ use winit::{
     window::WindowBuilder,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
-mod wasm {
-    use wasm_bindgen::prelude::*;
-
-    #[wasm_bindgen(start)]
-    pub fn run() {
-        super::main();
-    }
+mod time {
+    pub use wasm_timer::Instant;
 }
+#[cfg(target_arch = "wasm32")]
+use time::Instant;
 
 #[cfg_attr(
     target_os = "android",
@@ -35,17 +34,34 @@ mod wasm {
     )
 )]
 pub fn main() {
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     env_logger::init();
+    #[cfg(target_arch = "wasm32")]
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Debug));
 
-    log::info!("starting android example!!");
+    log::info!("starting main example!!");
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
+    let wb = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(LogicalSize::new(800.0f32, 400.0))
-        .build(&event_loop)
-        .unwrap();
+        .with_inner_size(LogicalSize::new(800.0f32, 400.0));
+
+    #[cfg(target_arch = "wasm32")]
+    let wb = {
+        use wasm_bindgen::JsCast;
+        use winit::platform::web::WindowBuilderExtWebSys;
+
+        let document = web_sys::window().unwrap().document().unwrap();
+        let canvas = document.get_element_by_id("main_canvas").unwrap();
+        let canvas: web_sys::HtmlCanvasElement = canvas
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .map_err(|_| ())
+            .unwrap();
+
+        wb.with_canvas(Some(canvas))
+    };
+
+    let window = wb.build(&event_loop).unwrap();
 
     // create the SpriteRender
     let mut render: Box<dyn SpriteRender> = {
@@ -98,7 +114,6 @@ pub fn main() {
     #[cfg(not(target_arch = "android"))]
     create_textures(&mut render, &mut instances);
 
-    use std::time::Instant;
     let mut clock = Instant::now();
     let mut change_clock = Instant::now();
     let mut change_frame = 0;
@@ -137,12 +152,13 @@ pub fn main() {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
                 WindowEvent::CloseRequested => *control_flow = winit::event_loop::ControlFlow::Exit,
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let scale = match delta {
-                        MouseScrollDelta::LineDelta(_, dy) => 2.0f32.powf(-dy / 3.0),
-                        MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                            2.0f32.powf(-y as f32 / 3.0)
+                    let dy = match delta {
+                        MouseScrollDelta::LineDelta(_, dy) => dy as f32,
+                        MouseScrollDelta::PixelDelta(PhysicalPosition { y: dy, .. }) => {
+                            dy as f32 / 133.33
                         }
                     };
+                    let scale = 2.0f32.powf(-dy as f32 / 3.0);
 
                     let (w, h) = {
                         let (w, h) = camera.screen_size();
@@ -257,7 +273,6 @@ pub fn main() {
                     position: PhysicalPosition { x, y },
                     ..
                 } => {
-                    log::info!("mouse {} {}", x, y);
                     let last_cursor_pos = cursor_pos;
                     cursor_pos.x = x as f32;
                     cursor_pos.y = y as f32;
@@ -362,6 +377,7 @@ pub fn main() {
                         1000.0 / mean_fps
                     );
                     window.set_title(&title);
+                    log::debug!("{}", title);
                 }
                 // let elapsed = frame_clock.elapsed().as_secs_f32();
                 // println!("elapsed: {:5.2}, sleep: {:5.2}", elapsed*1000.0, (1.0/60.0 - elapsed)*1000.0);
@@ -380,7 +396,7 @@ pub fn main() {
 }
 
 fn create_textures(render: &mut Box<dyn SpriteRender>, instances: &mut Box<[SpriteInstance]>) {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let fruit_texture = {
         // let image = image::open("examples/fruits.png")
         let image = image::load_from_memory(include_bytes!("fruits.png"))

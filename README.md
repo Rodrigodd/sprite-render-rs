@@ -20,11 +20,21 @@ You need to enable the feature of a backend to run a example:
  cargo run --example main --features=opengl
  ```
 
+# Run example on Web
+
+```shell
+cargo build --example main --target=wasm32-unknown-unknown --features=webgl
+wasm-bindgen ./target/wasm32-unknown-unknown/debug/examples/main.wasm --target web --no-typescript --out-dir ./dist
+wasm-opt ./dist/main_bg.wasm -o ./dist/main_bg.wasm -O # (optional)
+
+cargo build --example main --target=wasm32-unknown-unknown --features=webgl && wasm-bindgen ./target/wasm32-unknown-unknown/debug/examples/main.wasm --target web --no-typescript --out-dir ./dist && wasm-opt ./dist/main_bg.wasm -o ./dist/main_bg.wasm -O # (optional)
+```
+
 # Run example on Android
 
 This library makes use of the ndk-rs crates, refer to that repo for more documentation.
 
-Make a example compile to a library.
+Make an example compile to a library:
 
 ```
 // add to Cargo.toml
@@ -34,7 +44,7 @@ crate-type = ["cdylib"]
 path = "examples/main.rs"
 ``` 
 
-And run the example by executing `cargo apk run --example main --features=opengles`. Use `adb logcat sprite-render:I *:S RustStdoutStderr:D` to get the logs.
+And then run the example by executing `cargo apk run --example main --features=opengles`. Use `adb logcat sprite-render:I *:S RustStdoutStderr:D` to get the logs.
 
 
 ## License

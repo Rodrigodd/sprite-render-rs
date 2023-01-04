@@ -1,0 +1,95 @@
+<html>
+
+<head>
+    <title>PIPE PUZZLE</title>
+    <link rel="icon"
+        href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAqFJREFUaIHt2TtrFFEYxvHfmpisMV7xBtHCFBFRsVMLFQW1sLBIJaQwYO0X0EIFQRRbSSVY2ChBLEUbwY8gXoKFpaBITKIxwWTXYkyyMzuZnd2dyW4gf5hi5rz7nuc5tzlzlvZkCCWUa12dTVbUgc1N5ojjIAppAlMFVXAYl3AR/dglMJEPfWo2T9oeOIF7ON2cojq5hguJETWHUBEjuKL+3loRkgzswQscT/x1T8aKYPb/lYLlDGzCKxwJPS3gpKBbj2GHfPrlER6mC40zsA5PRMUfwA3BNG4j4gwMC1aaJc7iDjbkLyhEUTAWlqOsEDVQxK3Qk6O4i64slaWkiN7kkKiBYexbvOvBfdXiC4Le6JbtHJjDZH0/iRoYDN0NYWckogtb5fP6aqAxKg1swZlQssGY6G2Cad4mVEo5hPWLdwPYHYnu1VbiCcvpC5Xsj4nuzlVLQ1QaCLf39khkQdu1PmFJ4faNrjxtKJ62lZWeZj9o6qecUFaqP13+BqYxg78aEliL/AzMYgLzudWAvAxMC7YEScMlDTOYSigvNP9RH1/pRIa5fiWHZGugJF78D7zGmKB3avElfZXZGphWPVHf4iZ+ZlrTItkamIncf8V1/M60lhDZvchKgqWykqdyFU+WPRC34nysenIb71NkG8RlL/EpMa7qk7Jx4gxUj/tn+JAi2wB4Uztw5bcS6RjTYVKh9hBvVwOj5o2mCVz1u9E1A61mzUCrSb8KLbdRqyxvAZ2C87e9OBUqeYfHTWYfr3pyFd/wGc+bzI7gsKRkpf996TRururgpsFUC+LP41xMRI/6D7T+qN6ZwgN8R4Ynq0tzoF9gIspmbKwz65T4L6kRCwYyY9WvQmsGWs2agVaz6g0sLaPlZc7Ryg295LLMlcg/HERrgSqYvrQAAAAASUVORK5CYII=" />
+    <style>
+        html {
+            heigth: 100%;
+            margin: 0;
+        }
+        body {
+            height: 100%;
+            margin: 0;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            background-image: linear-gradient(#001000, #002000);
+        }
+
+        canvas {
+            outline: none;
+            -webkit-tap-highlight-color: rgba(255, 255, 255, 0);
+            /* mobile webkit */
+
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 0;
+        }
+
+        progress {
+            width: 350px;
+            height: 40px;
+
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1;
+
+            -webkit-appearance: none;
+            appearance: none;
+        }
+
+
+        .centered {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+        }
+    </style>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+    <script defer type="module">
+        import init from './main.js';
+
+        let load_bar = document.getElementById('loading');
+
+        $.ajax({
+            url: './main_bg.wasm',
+            xhr: function () {
+                var xhr = new window.XMLHttpRequest();
+                xhr.responseType = 'arraybuffer';
+                //Download progress
+                xhr.addEventListener("progress", function (evt) {
+                    let percentComplete = 1;
+                    if (evt.lengthComputable) {
+                        percentComplete = evt.loaded / evt.total;
+                    } else if (evt.loaded) {
+                        percentComplete = evt.loaded / 3467246;
+                    }
+                    console.log(percentComplete);
+                    load_bar.value = Math.floor(percentComplete * 100);
+                }, false);
+                return xhr;
+            }
+        }).done(function (data, textStatus, jqXHR) {
+            load_bar.parentNode.removeChild(load_bar);
+            init(data);
+        }).fail(function (jqXHR, settings, exception) {
+            console.log('could not load');
+        });
+    </script>
+</head>
+
+<body oncontextmenu="return false">
+    <div class="centered">
+        <canvas id="main_canvas" tabindex="0" width="768" height="553"></canvas>
+        <progress id="loading" max="100" value="50"></progress>
+    </div>
+</body>
+
+</html>
