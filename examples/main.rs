@@ -56,7 +56,7 @@ pub fn main() {
             } else if #[cfg(feature = "opengles")] {
                 Box::new(())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
-                Box::new(sprite_render::WebGLSpriteRender::new(&window).unwrap();)
+                Box::new(sprite_render::WebGLSpriteRender::new(&window))
             } else {
                 log::warn!("No sprite-render backend was choosen. \
                            Enable one of them by enabling a feature, like `--features=opengl`");
@@ -385,7 +385,7 @@ fn create_textures(render: &mut Box<dyn SpriteRender>, instances: &mut Box<[Spri
         // let image = image::open("examples/fruits.png")
         let image = image::load_from_memory(include_bytes!("fruits.png"))
             .expect("File not Found!")
-            .to_rgba();
+            .to_rgba8();
         render.new_texture(
             image.width(),
             image.height(),
@@ -397,7 +397,7 @@ fn create_textures(render: &mut Box<dyn SpriteRender>, instances: &mut Box<[Spri
         // let image = image::open("examples/Jelly.png")
         let image = image::load_from_memory(include_bytes!("Jelly.png"))
             .expect("File not Found!")
-            .to_rgba();
+            .to_rgba8();
         render.new_texture(
             image.width(),
             image.height(),

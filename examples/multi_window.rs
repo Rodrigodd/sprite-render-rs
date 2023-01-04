@@ -112,7 +112,7 @@ fn main() {
             if #[cfg(feature = "opengl")] {
                 sprite_render::GLSpriteRender::new(&window, true).unwrap_or_else(|x| panic!("{}", x))
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
-                sprite_render::WebGLSpriteRender::new(&window).unwrap();
+                sprite_render::WebGLSpriteRender::new(&window).unwrap()
             } else {
                 ()
             }
@@ -128,7 +128,7 @@ fn main() {
     let fruit_texture = {
         let image = image::open("examples/fruits.png")
             .expect("File not Found!")
-            .to_rgba();
+            .to_rgba8();
         render.new_texture(
             image.width(),
             image.height(),
@@ -139,7 +139,7 @@ fn main() {
     let jelly_texture = {
         let image = image::open("examples/Jelly.png")
             .expect("File not Found!")
-            .to_rgba();
+            .to_rgba8();
         render.new_texture(
             image.width(),
             image.height(),
