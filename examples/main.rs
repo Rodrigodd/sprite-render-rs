@@ -150,12 +150,12 @@ pub fn main() {
                 WindowEvent::CloseRequested => *control_flow = winit::event_loop::ControlFlow::Exit,
                 WindowEvent::MouseWheel { delta, .. } => {
                     let dy = match delta {
-                        MouseScrollDelta::LineDelta(_, dy) => dy as f32,
+                        MouseScrollDelta::LineDelta(_, dy) => dy,
                         MouseScrollDelta::PixelDelta(PhysicalPosition { y: dy, .. }) => {
                             dy as f32 / 133.33
                         }
                     };
-                    let scale = 2.0f32.powf(-dy as f32 / 3.0);
+                    let scale = 2.0f32.powf(-dy / 3.0);
 
                     let (w, h) = {
                         let (w, h) = camera.screen_size();

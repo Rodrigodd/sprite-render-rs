@@ -3,7 +3,7 @@ use std::{
     ffi::{CStr, CString},
     mem,
     num::NonZeroU32,
-    os::raw::{c_char, c_void},
+    os::raw::c_void,
     ptr, str,
 };
 
@@ -178,12 +178,12 @@ impl<'a> Renderer for GLRenderer<'a> {
                         self.render.texture_unit_map.len() as u32 - 1
                     };
                     ptr::copy_nonoverlapping(
-                        mem::transmute(sprite),
+                        sprite as *const _ as *const u8,
                         cursor,
                         mem::size_of::<SpriteInstance>(),
                     );
                     ptr::copy_nonoverlapping(
-                        mem::transmute(&texture_unit),
+                        &texture_unit as *const u32 as *const u8,
                         cursor.add(memoffset::offset_of!(SpriteInstance, texture)),
                         mem::size_of::<u32>(),
                     );
@@ -799,12 +799,11 @@ impl SpriteRender for GLSpriteRender {
                     gl::NEAREST
                 } as i32,
             );
-            let data_ptr;
-            if data.len() as u32 >= width * height * 4 {
-                data_ptr = data.as_ptr() as *const c_void;
+            let data_ptr = if data.len() as u32 >= width * height * 4 {
+                data.as_ptr() as *const c_void
             } else {
-                data_ptr = std::ptr::null::<c_void>();
-            }
+                std::ptr::null::<c_void>()
+            };
             gl::TexImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -859,12 +858,11 @@ impl SpriteRender for GLSpriteRender {
     }
 
     fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]) {
-        let data_ptr;
-        if data.len() as u32 >= width * height * 4 {
-            data_ptr = data.as_ptr() as *const c_void;
+        let data_ptr = if data.len() as u32 >= width * height * 4 {
+            data.as_ptr() as *const c_void
         } else {
-            data_ptr = std::ptr::null::<c_void>();
-        }
+            std::ptr::null::<c_void>()
+        };
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexImage2D(

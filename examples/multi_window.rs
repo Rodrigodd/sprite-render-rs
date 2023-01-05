@@ -101,7 +101,7 @@ fn main() {
     let mut render = {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
-                sprite_render::GLSpriteRender::new(&window, true).unwrap_or_else(|x| panic!("{}", x))
+                sprite_render::GLSpriteRender::new(&window, true).unwrap()
             } else {
                 ()
             }
