@@ -261,63 +261,39 @@ impl From<glutin::error::Error> for Error {
 struct Context<T> {
     context: T,
     surface: Surface<WindowSurface>,
+    config: glutin::config::Config,
     vao: u32,
+}
+impl<T> Context<T> {
+    fn map<U, F: FnOnce(T, &Surface<WindowSurface>) -> glutin::error::Result<U>>(
+        self,
+        f: F,
+    ) -> glutin::error::Result<Context<U>> {
+        let Context {
+            context,
+            vao,
+            surface,
+            config,
+        } = self;
+        Ok(Context {
+            context: f(context, &surface)?,
+            vao,
+            surface,
+            config,
+        })
+    }
 }
 impl Context<NotCurrentContext> {
     fn make_current(self) -> glutin::error::Result<Context<PossiblyCurrentContext>> {
-        let Context {
-            context,
-            vao,
-            surface,
-        } = self;
-        Ok(Context {
-            context: context.make_current(&surface)?,
-            vao,
-            surface,
-        })
+        self.map(|ctx, surface| ctx.make_current(surface))
     }
 }
 impl Context<PossiblyCurrentContext> {
-    fn make_current(&self) -> Result<(), glutin::error::Error> {
-        self.context.make_current(&self.surface)
-    }
-
-    fn make_not_current(self) -> glutin::error::Result<Context<NotCurrentContext>> {
-        let Context {
-            context,
-            vao,
-            surface,
-        } = self;
-        Ok(Context {
-            context: context.make_not_current()?,
-            surface,
-            vao,
-        })
-    }
-
-    fn swap_buffers(&self) -> glutin::error::Result<()> {
-        self.surface.swap_buffers(&self.context)
-    }
-}
-
-pub struct GLSpriteRender {
-    contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
-    current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
-    shader_program: u32,
-    vertex_buffer: u32,
-    instance_buffer: u32,
-    instance_buffer_size: u32,
-    textures: Vec<(u32, u32, u32)>, // id, width, height
-    /// maps a texture to a texture unit
-    texture_unit_map: HashMap<u32, u32>,
-    max_texture_units: i32,
-    config: glutin::config::Config,
-    context_attributes: glutin::context::ContextAttributes,
-}
-impl GLSpriteRender {
-    /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
-    // TODO: build a better error handling!!!!
-    pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
+    fn new(
+        window: &Window,
+        vsync: bool,
+        shared: Option<&Context<PossiblyCurrentContext>>,
+    ) -> Result<Self, Error> {
         let raw_window_handle = window.raw_window_handle();
         let raw_display_handle = window.raw_display_handle();
 
@@ -347,7 +323,15 @@ impl GLSpriteRender {
 
         let display = config.display();
 
-        let context_attributes = ContextAttributesBuilder::new().build(Some(raw_window_handle));
+        let context_attributes = {
+            let builder = ContextAttributesBuilder::new();
+            let builder = if let Some(context) = shared {
+                builder.with_sharing(&context.context)
+            } else {
+                builder
+            };
+            builder.build(Some(raw_window_handle))
+        };
 
         let context = unsafe { display.create_context(&config, &context_attributes)? };
 
@@ -370,9 +354,53 @@ impl GLSpriteRender {
             surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))?;
         }
 
+        Ok(Context {
+            context,
+            surface,
+            config,
+            vao: 0,
+        })
+    }
+
+    fn make_current(&self) -> Result<(), glutin::error::Error> {
+        self.context.make_current(&self.surface)
+    }
+
+    fn make_not_current(self) -> glutin::error::Result<Context<NotCurrentContext>> {
+        self.map(|ctx, _| ctx.make_not_current())
+    }
+
+    fn swap_buffers(&self) -> glutin::error::Result<()> {
+        self.surface.swap_buffers(&self.context)
+    }
+}
+
+pub struct GLSpriteRender {
+    vsync: bool,
+    contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
+    current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
+    shader_program: u32,
+    vertex_buffer: u32,
+    instance_buffer: u32,
+    instance_buffer_size: u32,
+    textures: Vec<(u32, u32, u32)>, // id, width, height
+    /// maps a texture to a texture unit
+    texture_unit_map: HashMap<u32, u32>,
+    max_texture_units: i32,
+}
+impl GLSpriteRender {
+    /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
+    // TODO: build a better error handling!!!!
+    pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
+        let mut context = Context::new(window, vsync, None)?;
+
         gl::load_with(|symbol| {
             let symbol = CString::new(symbol).unwrap();
-            display.get_proc_address(symbol.as_c_str()).cast()
+            context
+                .config
+                .display()
+                .get_proc_address(symbol.as_c_str())
+                .cast()
         });
 
         unsafe {
@@ -562,6 +590,8 @@ void main()
             (shader_program, vao, instance_buffer, vertex_buffer)
         };
 
+        context.vao = vao;
+
         unsafe {
             if gl_check_error!("SpriteRender::new") {
                 return Err(Error::CreateFailed);
@@ -573,18 +603,10 @@ void main()
         contexts.insert(window_id, None);
 
         let mut sprite_render = Self {
-            config,
-            context_attributes,
+            vsync,
             shader_program,
             contexts,
-            current_context: Some((
-                window_id,
-                Context {
-                    context,
-                    vao,
-                    surface,
-                },
-            )),
+            current_context: Some((window.id(), context)),
             vertex_buffer,
             instance_buffer,
             instance_buffer_size: 0,
@@ -747,10 +769,19 @@ void main()
 impl SpriteRender for GLSpriteRender {
     fn add_window(&mut self, window: &Window) {
         let window_id = window.id();
-        // TODO: progate the error
-        self.set_current_context(window_id).unwrap();
 
-        let _ = (&self.config, &self.context_attributes);
+        // TODO: propagate errors
+        let mut context = Context::new(
+            window,
+            self.vsync,
+            self.current_context.as_ref().map(|x| &x.1),
+        )
+        .unwrap();
+        context.vao = unsafe { Self::create_vao(self.vertex_buffer, self.instance_buffer) };
+
+        self.contexts
+            .insert(window_id, Some(context.make_not_current().unwrap()));
+        self.set_current_context(window_id).unwrap();
 
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
