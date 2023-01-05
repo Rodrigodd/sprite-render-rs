@@ -14,8 +14,8 @@ opengles_version = [2, 0]
 
 [features]
 
-opengl = ["raw-gl-context", "gl_generator"]
-opengles = ["raw-gl-context", "gl_generator"]
+opengl = ["glutin", "gl_generator"]
+opengles = ["glutin", "gl_generator"]
 webgl = []
 
 [dependencies]
@@ -27,8 +27,7 @@ raw-window-handle = "0.5.0"
 log = "0.4.17"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# raw-gl-context = { optional = true, path = "../raw-gl-context" }
-raw-gl-context = { optional = true, git = "https://github.com/Rodrigodd/raw-gl-context", rev = "2ab0454550686ded3c6ad16b9619aa4c89c5132d" }
+glutin = { version = "0.30.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.build-dependencies]
 gl_generator = { version = "0.14.0", optional = true }

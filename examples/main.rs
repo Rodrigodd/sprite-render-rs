@@ -65,8 +65,7 @@ pub fn main() {
     let mut render: Box<dyn SpriteRender> = {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
-                Box::new(sprite_render::GLSpriteRender::new(&window, true)
-                         .unwrap_or_else(|x| panic!("{}", x)))
+                Box::new(sprite_render::GLSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(feature = "opengles")] {
                 Box::new(())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {

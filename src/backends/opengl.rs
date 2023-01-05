@@ -1,15 +1,26 @@
-use raw_gl_context::{GlConfig, GlContext};
-use std::ffi::{CStr, CString};
-use std::marker::PhantomData;
-use std::mem;
-use std::os::raw::{c_char, c_void};
-use std::ptr;
-use std::str;
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::HashMap,
+    ffi::{CStr, CString},
+    mem,
+    num::NonZeroU32,
+    os::raw::{c_char, c_void},
+    ptr, str,
+};
+
+use glutin::{
+    config::ConfigTemplateBuilder,
+    context::{ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext},
+    display::{Display, DisplayApiPreference, GetGlDisplay},
+    prelude::{
+        GlConfig, GlDisplay, NotCurrentGlContextSurfaceAccessor,
+        PossiblyCurrentContextGlSurfaceAccessor, PossiblyCurrentGlContext,
+    },
+    surface::{GlSurface, Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface},
+};
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::{Window, WindowId};
 
-use crate::common::*;
-use crate::{Renderer, SpriteRender};
+use crate::{common::*, Renderer, SpriteRender};
 
 mod gl {
     include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
@@ -223,68 +234,75 @@ impl<'a> Renderer for GLRenderer<'a> {
 
     fn finish(&mut self) {
         log::trace!("finish");
+        // TODO: return error
         self.render
             .current_context
             .as_ref()
             .unwrap()
             .1
-            .swap_buffers();
+            .swap_buffers()
+            .unwrap();
     }
 }
 
-trait ContextCurrentState {}
-struct NotCurrent;
-struct PossiblyCurrent;
-impl ContextCurrentState for NotCurrent {}
-impl ContextCurrentState for PossiblyCurrent {}
+#[derive(Debug)]
+pub enum Error {
+    Glutin(glutin::error::Error),
+    /// Either width or height were zero.
+    BadDimensions,
+    CreateFailed,
+}
+impl From<glutin::error::Error> for Error {
+    fn from(value: glutin::error::Error) -> Self {
+        Self::Glutin(value)
+    }
+}
 
-struct Context<T: ContextCurrentState> {
-    context: GlContext,
+struct Context<T> {
+    context: T,
+    surface: Surface<WindowSurface>,
     vao: u32,
-    _p: PhantomData<T>,
 }
-impl Context<NotCurrent> {
-    unsafe fn make_current(self) -> Context<PossiblyCurrent> {
-        let Self { context, vao, .. } = self;
-        context.make_current();
-        Context {
+impl Context<NotCurrentContext> {
+    fn make_current(self) -> glutin::error::Result<Context<PossiblyCurrentContext>> {
+        let Context {
             context,
             vao,
-            _p: Default::default(),
-        }
+            surface,
+        } = self;
+        Ok(Context {
+            context: context.make_current(&surface)?,
+            vao,
+            surface,
+        })
     }
 }
-impl Context<PossiblyCurrent> {
-    unsafe fn treat_as_not_current(self) -> Context<NotCurrent> {
-        let Self { context, vao, .. } = self;
-        Context {
-            context,
-            vao,
-            _p: Default::default(),
-        }
+impl Context<PossiblyCurrentContext> {
+    fn make_current(&self) -> Result<(), glutin::error::Error> {
+        self.context.make_current(&self.surface)
     }
 
-    unsafe fn make_not_current(self) -> Context<NotCurrent> {
-        let Self { context, vao, .. } = self;
-        context.make_not_current();
-        Context {
+    fn make_not_current(self) -> glutin::error::Result<Context<NotCurrentContext>> {
+        let Context {
             context,
             vao,
-            _p: Default::default(),
-        }
+            surface,
+        } = self;
+        Ok(Context {
+            context: context.make_not_current()?,
+            surface,
+            vao,
+        })
     }
-}
-impl<T: ContextCurrentState> Deref for Context<T> {
-    type Target = GlContext;
-    fn deref(&self) -> &Self::Target {
-        &self.context
+
+    fn swap_buffers(&self) -> glutin::error::Result<()> {
+        self.surface.swap_buffers(&self.context)
     }
 }
 
 pub struct GLSpriteRender {
-    vsync: bool,
-    contexts: HashMap<WindowId, Option<Context<NotCurrent>>>,
-    current_context: Option<(WindowId, Context<PossiblyCurrent>)>,
+    contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
+    current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
     shader_program: u32,
     vertex_buffer: u32,
     instance_buffer: u32,
@@ -293,22 +311,69 @@ pub struct GLSpriteRender {
     /// maps a texture to a texture unit
     texture_unit_map: HashMap<u32, u32>,
     max_texture_units: i32,
+    config: glutin::config::Config,
+    context_attributes: glutin::context::ContextAttributes,
 }
 impl GLSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     // TODO: build a better error handling!!!!
-    pub fn new(window: &Window, vsync: bool) -> Result<Self, String> {
-        let config = GlConfig {
-            vsync,
-            ..Default::default()
+    pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
+        let raw_window_handle = window.raw_window_handle();
+        let raw_display_handle = window.raw_display_handle();
+
+        let preference = DisplayApiPreference::WglThenEgl(Some(raw_window_handle));
+        let display = unsafe { Display::new(raw_display_handle, preference)? };
+
+        // let interval = vsync.then_some(1);
+        let template = ConfigTemplateBuilder::new()
+            .compatible_with_native_window(raw_window_handle)
+            // .with_swap_interval(interval, interval)
+            .build();
+
+        let config = {
+            let configs = unsafe { display.find_configs(template)? };
+            configs
+                .reduce(|accum, config| {
+                    if config.num_samples() > accum.num_samples() {
+                        config
+                    } else {
+                        accum
+                    }
+                })
+                .unwrap()
         };
-        let context = unsafe {
-            let context = GlContext::create(window, config).map_err(|x| format!("{:?}", x))?;
-            context.make_current();
-            context
+        log::debug!("Picked config: {:?}", config);
+        log::debug!("Picked a config with {} samples", config.num_samples());
+
+        let display = config.display();
+
+        let context_attributes = ContextAttributesBuilder::new().build(Some(raw_window_handle));
+
+        let context = unsafe { display.create_context(&config, &context_attributes)? };
+
+        let size = window.inner_size();
+        let (width, height) = match (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
+            (Some(w), Some(h)) => (w, h),
+            _ => return Err(Error::BadDimensions),
         };
 
-        gl::load_with(|symbol| context.get_proc_address(symbol) as *const _);
+        let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            raw_window_handle,
+            width,
+            height,
+        );
+        let surface = unsafe { display.create_window_surface(&config, &surface_attributes)? };
+
+        let context = context.make_current(&surface)?;
+
+        if vsync {
+            surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))?;
+        }
+
+        gl::load_with(|symbol| {
+            let symbol = CString::new(symbol).unwrap();
+            display.get_proc_address(symbol.as_c_str()).cast()
+        });
 
         unsafe {
             extern "system" fn callback(
@@ -337,11 +402,23 @@ impl GLSpriteRender {
             gl::DebugMessageCallback(Some(callback), ptr::null());
         }
 
-        unsafe {
-            let string = gl::GetString(gl::VERSION);
-            let string = CStr::from_ptr(string as *const c_char);
-            log::info!("OpenGL version: {}", string.to_str().unwrap());
+        fn get_gl_string(variant: gl::types::GLenum) -> Option<&'static CStr> {
+            unsafe {
+                let s = gl::GetString(variant);
+                (!s.is_null()).then(|| CStr::from_ptr(s.cast()))
+            }
         }
+
+        if let Some(renderer) = get_gl_string(gl::RENDERER) {
+            log::info!("Running on {}", renderer.to_string_lossy());
+        }
+        if let Some(version) = get_gl_string(gl::VERSION) {
+            log::info!("OpenGL Version {}", version.to_string_lossy());
+        }
+        if let Some(shaders_version) = get_gl_string(gl::SHADING_LANGUAGE_VERSION) {
+            log::info!("Shaders version on {}", shaders_version.to_string_lossy());
+        }
+
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::Enable(gl::BLEND);
@@ -356,8 +433,7 @@ impl GLSpriteRender {
         let (shader_program, vao, instance_buffer, vertex_buffer) = unsafe {
             // Setup shader compilation checks
             let mut success = i32::from(gl::FALSE);
-            let mut info_log = Vec::with_capacity(512);
-            info_log.set_len(512 - 1); // -1 to skip trialing null character
+            let mut info_log = vec![0; 512];
 
             // Vertex shader
             let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
@@ -488,7 +564,7 @@ void main()
 
         unsafe {
             if gl_check_error!("SpriteRender::new") {
-                return Err("opengl error on creation".to_string());
+                return Err(Error::CreateFailed);
             }
         }
 
@@ -497,7 +573,8 @@ void main()
         contexts.insert(window_id, None);
 
         let mut sprite_render = Self {
-            vsync,
+            config,
+            context_attributes,
             shader_program,
             contexts,
             current_context: Some((
@@ -505,7 +582,7 @@ void main()
                 Context {
                     context,
                     vao,
-                    _p: Default::default(),
+                    surface,
                 },
             )),
             vertex_buffer,
@@ -522,7 +599,6 @@ void main()
     }
 
     fn reallocate_instance_buffer(&mut self, size_need: usize) {
-
         let new_size = size_need.next_power_of_two();
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
@@ -642,65 +718,39 @@ void main()
         vao
     }
 
-    fn set_current_context(&mut self, window_id: WindowId) {
+    fn set_current_context(&mut self, window_id: WindowId) -> Result<(), glutin::error::Error> {
         let already_current = self
             .current_context
             .as_ref()
             .map_or(false, |x| x.0 == window_id);
         if !already_current {
             let previous_context = self.current_context.take();
-            unsafe {
-                self.current_context = Some((
-                    window_id,
-                    self.contexts
-                        .get_mut(&window_id)
-                        .unwrap()
-                        .take()
-                        .unwrap()
-                        .make_current(),
-                ));
-            }
+            self.current_context = Some((
+                window_id,
+                self.contexts
+                    .get_mut(&window_id)
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .make_current()?,
+            ));
             if let Some((window, context)) = previous_context {
-                unsafe {
-                    *self.contexts.get_mut(&window).unwrap() = Some(context.treat_as_not_current());
-                }
+                *self.contexts.get_mut(&window).unwrap() = Some(context.make_not_current()?);
             }
         } else {
-            // Make the current context current again to be sure that it is. If another
-            // GLSpriteRender was dropped, the current context could be NULL.
-            unsafe {
-                self.current_context
-                    .as_mut()
-                    .map(|(_, context)| context.make_current());
-            }
+            // Make the current context current again to be sure that it is.
+            self.current_context.as_ref().unwrap().1.make_current()?;
         }
+        Ok(())
     }
 }
 impl SpriteRender for GLSpriteRender {
     fn add_window(&mut self, window: &Window) {
-        if self.contexts.contains_key(&window.id()) {
-            log::warn!("Tried to add a window to SpriteRender twice");
-            return;
-        }
-
-        let config = GlConfig {
-            vsync: self.vsync,
-            share: Some(&self.current_context.as_ref().unwrap().1.context),
-            ..Default::default()
-        };
-        let context = unsafe { GlContext::create(window, config).unwrap() };
-
         let window_id = window.id();
-        self.contexts.insert(
-            window_id,
-            Some(Context {
-                context,
-                vao: 0,
-                _p: Default::default(),
-            }),
-        );
+        // TODO: progate the error
+        self.set_current_context(window_id).unwrap();
 
-        self.set_current_context(window_id);
+        let _ = (&self.config, &self.context_attributes);
 
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
@@ -715,9 +765,15 @@ impl SpriteRender for GLSpriteRender {
         let mut context = self.contexts.remove(&window_id).flatten();
         if let Some((id, _)) = self.current_context.as_mut() {
             if *id == window_id {
-                unsafe {
-                    context = Some(self.current_context.take().unwrap().1.make_not_current());
-                }
+                // TODO: propagate the error
+                context = Some(
+                    self.current_context
+                        .take()
+                        .unwrap()
+                        .1
+                        .make_not_current()
+                        .unwrap(),
+                );
             }
         }
         drop(context);
@@ -827,12 +883,14 @@ impl SpriteRender for GLSpriteRender {
     }
 
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a> {
-        self.set_current_context(window);
+        // TODO: return error
+        self.set_current_context(window).unwrap();
         Box::new(GLRenderer { render: self })
     }
 
     fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
-        self.set_current_context(window_id);
+        // TODO: return error
+        self.set_current_context(window_id).unwrap();
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
             gl_check_error!("resize");
