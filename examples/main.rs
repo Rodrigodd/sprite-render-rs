@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use sprite_render::{Camera, SpriteInstance, SpriteRender};
-
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::{
@@ -11,9 +12,6 @@ use winit::{
     event_loop::EventLoop,
     window::WindowBuilder,
 };
-
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 mod time {
     pub use wasm_timer::Instant;

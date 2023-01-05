@@ -1,16 +1,18 @@
-use raw_gl_context::{GlConfig, GlContext, Api};
-use std::ffi::{CStr, CString};
-use std::io::{self, Write};
-use std::marker::PhantomData;
-use std::mem;
-use std::os::raw::{c_char, c_void};
-use std::ptr;
-use std::str;
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::HashMap,
+    ffi::{CStr, CString},
+    io::{self, Write},
+    marker::PhantomData,
+    mem,
+    ops::Deref,
+    os::raw::{c_char, c_void},
+    ptr, str,
+};
+
+use raw_gl_context::{Api, GlConfig, GlContext};
 use winit::window::{Window, WindowId};
 
-use crate::common::*;
-use crate::{Renderer, SpriteRender};
+use crate::{common::*, Renderer, SpriteRender};
 
 mod gl {
     include!(concat!(env!("OUT_DIR"), "/gles_bindings.rs"));

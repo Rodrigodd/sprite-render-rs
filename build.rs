@@ -10,10 +10,9 @@ fn main() {
 
 #[cfg(feature = "gl_generator")]
 fn generate_gl() {
+    use std::{env, fs::File, path::Path};
+
     use gl_generator::{Api, Fallbacks, GlobalGenerator, Profile, Registry};
-    use std::env;
-    use std::fs::File;
-    use std::path::Path;
 
     let dest = env::var("OUT_DIR").unwrap();
 

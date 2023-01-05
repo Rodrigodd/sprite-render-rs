@@ -1,6 +1,7 @@
+use std::{collections::HashMap, fmt::Error, time::Instant};
+
 use rand::Rng;
 use sprite_render::{Camera, SpriteInstance, SpriteRender};
-use std::{collections::HashMap, fmt::Error, time::Instant};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::{

@@ -1,21 +1,20 @@
-use wasm_bindgen::JsCast;
-use web_sys::console;
-use web_sys::{WebGlBuffer, WebGlProgram, WebGlRenderingContext, WebGlShader, WebGlTexture};
+use std::{
+    collections::HashMap,
+    io::{self, Write},
+    mem, str,
+};
 
+use wasm_bindgen::JsCast;
+use web_sys::{
+    console, WebGlBuffer, WebGlProgram, WebGlRenderingContext, WebGlShader, WebGlTexture,
+};
 use winit::{
     event_loop::{EventLoop, EventLoopWindowTarget},
     platform::web::WindowExtWebSys,
-    window::WindowBuilder,
-    window::{Window, WindowId},
+    window::{Window, WindowBuilder, WindowId},
 };
 
-use std::collections::HashMap;
-use std::io::{self, Write};
-use std::mem;
-use std::str;
-
-use crate::common::*;
-use crate::{Renderer, SpriteRender};
+use crate::{common::*, Renderer, SpriteRender};
 
 const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
