@@ -2,20 +2,29 @@ use std::{
     collections::HashMap,
     ffi::{CStr, CString},
     io::{self, Write},
-    marker::PhantomData,
     mem,
-    ops::Deref,
-    os::raw::{c_char, c_void},
+    num::NonZeroU32,
+    os::raw::c_void,
     ptr, str,
 };
 
-use raw_gl_context::{Api, GlConfig, GlContext};
+use glutin::{
+    config::ConfigTemplateBuilder,
+    context::{ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext},
+    display::{Display, DisplayApiPreference, GetGlDisplay},
+    prelude::{
+        GlConfig, GlDisplay, NotCurrentGlContextSurfaceAccessor,
+        PossiblyCurrentContextGlSurfaceAccessor, PossiblyCurrentGlContext,
+    },
+    surface::{GlSurface, Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface},
+};
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::{Window, WindowId};
 
 use crate::{common::*, Renderer, SpriteRender};
 
 mod gl {
-    include!(concat!(env!("OUT_DIR"), "/gles_bindings.rs"));
+    include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
 }
 use gl::types::*;
 
@@ -207,59 +216,151 @@ impl<'a> Renderer for GlesRenderer<'a> {
             .as_ref()
             .unwrap()
             .1
-            .swap_buffers();
+            .swap_buffers()
+            .unwrap();
     }
 }
 
-trait ContextCurrentState {}
-struct NotCurrent;
-struct PossiblyCurrent;
-impl ContextCurrentState for NotCurrent {}
-impl ContextCurrentState for PossiblyCurrent {}
+#[derive(Debug)]
+pub enum Error {
+    Glutin(glutin::error::Error),
+    /// Either width or height were zero.
+    BadDimensions,
+    CreateFailed,
+}
+impl From<glutin::error::Error> for Error {
+    fn from(value: glutin::error::Error) -> Self {
+        Self::Glutin(value)
+    }
+}
 
-struct Context<T: ContextCurrentState> {
-    context: GlContext,
-    _p: PhantomData<T>,
+struct Context<T> {
+    context: T,
+    surface: Surface<WindowSurface>,
+    config: glutin::config::Config,
+    vao: u32,
 }
-impl Context<NotCurrent> {
-    unsafe fn make_current(self) -> Context<PossiblyCurrent> {
-        let Self { context, .. } = self;
-        context.make_current();
-        Context {
+impl<T> Context<T> {
+    fn map<U, F: FnOnce(T, &Surface<WindowSurface>) -> glutin::error::Result<U>>(
+        self,
+        f: F,
+    ) -> glutin::error::Result<Context<U>> {
+        let Context {
             context,
-            _p: Default::default(),
-        }
+            surface,
+            config,
+            vao,
+        } = self;
+        Ok(Context {
+            context: f(context, &surface)?,
+            surface,
+            config,
+            vao,
+        })
     }
 }
-impl Context<PossiblyCurrent> {
-    unsafe fn treat_as_not_current(self) -> Context<NotCurrent> {
-        let Self { context, .. } = self;
-        Context {
-            context,
-            _p: Default::default(),
+impl Context<NotCurrentContext> {
+    fn make_current(self) -> glutin::error::Result<Context<PossiblyCurrentContext>> {
+        self.map(|ctx, surface| ctx.make_current(surface))
+    }
+}
+impl Context<PossiblyCurrentContext> {
+    fn new(
+        window: &Window,
+        vsync: bool,
+        shared: Option<&Context<PossiblyCurrentContext>>,
+    ) -> Result<Self, Error> {
+        let raw_window_handle = window.raw_window_handle();
+        let raw_display_handle = window.raw_display_handle();
+
+        let preference = DisplayApiPreference::WglThenEgl(Some(raw_window_handle));
+        let display = unsafe { Display::new(raw_display_handle, preference)? };
+
+        // let interval = vsync.then_some(1);
+        let template = ConfigTemplateBuilder::new()
+            .compatible_with_native_window(raw_window_handle)
+            // .with_swap_interval(interval, interval)
+            .build();
+
+        let config = {
+            let configs = unsafe { display.find_configs(template)? };
+            configs
+                .reduce(|accum, config| {
+                    if config.num_samples() > accum.num_samples() {
+                        config
+                    } else {
+                        accum
+                    }
+                })
+                .unwrap()
+        };
+        log::debug!("Picked config: {:?}", config);
+        log::debug!("Picked a config with {} samples", config.num_samples());
+
+        let display = config.display();
+
+        let context_attributes = {
+            let builder = ContextAttributesBuilder::new();
+            // .with_context_api(
+            // glutin::context::ContextApi::Gles(Some(glutin::context::Version {
+            //     major: 2,
+            //     minor: 0,
+            // })),
+            // );
+            let builder = if let Some(context) = shared {
+                builder.with_sharing(&context.context)
+            } else {
+                builder
+            };
+            builder.build(Some(raw_window_handle))
+        };
+
+        let context = unsafe { display.create_context(&config, &context_attributes)? };
+
+        let size = window.inner_size();
+        let (width, height) = match (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
+            (Some(w), Some(h)) => (w, h),
+            _ => return Err(Error::BadDimensions),
+        };
+
+        let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            raw_window_handle,
+            width,
+            height,
+        );
+        let surface = unsafe { display.create_window_surface(&config, &surface_attributes)? };
+
+        let context = context.make_current(&surface)?;
+
+        if vsync {
+            surface.set_swap_interval(&context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))?;
         }
+
+        Ok(Context {
+            context,
+            surface,
+            config,
+            vao: 0,
+        })
     }
 
-    unsafe fn make_not_current(self) -> Context<NotCurrent> {
-        let Self { context, .. } = self;
-        context.make_not_current();
-        Context {
-            context,
-            _p: Default::default(),
-        }
+    fn make_current(&self) -> Result<(), glutin::error::Error> {
+        self.context.make_current(&self.surface)
     }
-}
-impl<T: ContextCurrentState> Deref for Context<T> {
-    type Target = GlContext;
-    fn deref(&self) -> &Self::Target {
-        &self.context
+
+    fn make_not_current(self) -> glutin::error::Result<Context<NotCurrentContext>> {
+        self.map(|ctx, _| ctx.make_not_current())
+    }
+
+    fn swap_buffers(&self) -> glutin::error::Result<()> {
+        self.surface.swap_buffers(&self.context)
     }
 }
 
 pub struct GlesSpriteRender {
     vsync: bool,
-    contexts: HashMap<WindowId, Option<Context<NotCurrent>>>,
-    current_context: Option<(WindowId, Context<PossiblyCurrent>)>,
+    contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
+    current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
     shader_program: u32,
     indice_buffer: u32,
     buffer: u32,
@@ -273,25 +374,33 @@ pub struct GlesSpriteRender {
 impl GlesSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     // TODO: build a better error handling!!!!
-    pub fn new(window: &Window, vsync: bool) -> Result<Self, String> {
-        let config = GlConfig {
-            vsync,
-            version: (2, 0),
-            api: Api::Gles,
-            ..Default::default()
-        };
-        let context = unsafe {
-            let context = GlContext::create(window, config).map_err(|x| format!("{:?}", x))?;
-            context.make_current();
+    pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
+        let mut context = Context::new(window, vsync, None)?;
+
+        gl::load_with(|symbol| {
+            let symbol = CString::new(symbol).unwrap();
             context
-        };
+                .config
+                .display()
+                .get_proc_address(symbol.as_c_str())
+                .cast()
+        });
 
-        gl::load_with(|symbol| context.get_proc_address(symbol) as *const _);
+        fn get_gl_string(variant: gl::types::GLenum) -> Option<&'static CStr> {
+            unsafe {
+                let s = gl::GetString(variant);
+                (!s.is_null()).then(|| CStr::from_ptr(s.cast()))
+            }
+        }
 
-        unsafe {
-            let string = gl::GetString(gl::VERSION);
-            let string = CStr::from_ptr(string as *const c_char);
-            log::info!("OpenGL version: {}", string.to_str().unwrap());
+        if let Some(renderer) = get_gl_string(gl::RENDERER) {
+            log::info!("Running on {}", renderer.to_string_lossy());
+        }
+        if let Some(version) = get_gl_string(gl::VERSION) {
+            log::info!("OpenGL Version {}", version.to_string_lossy());
+        }
+        if let Some(shaders_version) = get_gl_string(gl::SHADING_LANGUAGE_VERSION) {
+            log::info!("Shaders version on {}", shaders_version.to_string_lossy());
         }
 
         unsafe {
@@ -305,7 +414,7 @@ impl GlesSpriteRender {
         }
         log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
-        let (shader_program, buffer, indice_buffer) = unsafe {
+        let (shader_program, buffer, vao, indice_buffer) = unsafe {
             log::trace!("compiling vert shader");
             let vert_shader =
                 Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
@@ -356,9 +465,13 @@ void main() {{
             let [buffer, indice_buffer] = buffers;
             log::debug!("buffers: {} {}", buffer, indice_buffer);
 
+            let mut vao = 0;
+            gl::GenVertexArrays(1, &mut vao);
+
             gl_check_error!("gen buffers");
 
             log::trace!("setting attributes");
+            gl::BindVertexArray(vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
 
             let position = gl::GetAttribLocation(shader_program, cstr!("position")) as u32;
@@ -413,8 +526,10 @@ void main() {{
             gl_check_error!("set vertex attributes");
 
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            (shader_program, buffer, indice_buffer)
+            (shader_program, buffer, vao, indice_buffer)
         };
+
+        context.vao = vao;
 
         log::trace!("finished sprite-render creation");
         let mut contexts = HashMap::new();
@@ -423,18 +538,14 @@ void main() {{
 
         let mut sprite_render = Self {
             vsync,
-            shader_program,
             contexts,
-            current_context: Some((
-                window_id,
-                Context {
-                    context,
-                    _p: Default::default(),
-                },
-            )),
+            current_context: Some((window.id(), context)),
+
+            shader_program,
             buffer,
             indice_buffer,
             buffer_size: 0,
+
             textures: Vec::new(),
             texture_unit_map: HashMap::new(),
             max_texture_units,
@@ -549,48 +660,48 @@ void main() {{
         let h = sprite.uv_rect[3];
 
         // bottom left
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             -cos * width + sin * height + x,
             -sin * width - cos * height + y,
             u,
             v,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // bottom right
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             cos * width + sin * height + x,
             sin * width - cos * height + y,
             u + w,
             v,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // top left
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             -cos * width - sin * height + x,
             -sin * width + cos * height + y,
             u,
             v + h,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // top right
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             cos * width - sin * height + x,
             sin * width + cos * height + y,
             u + w,
             v + h,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&(texture as u16).to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
         Ok(())
     }
 
@@ -607,8 +718,8 @@ void main() {{
             );
             gl_check_error!("reallocate buffer to {}", new_size);
 
-            let indices = (0..(new_size * 6 * mem::size_of::<u16>()) as u16)
-                .map(|x| x / 6 * 4 + [0u16, 1, 2, 1, 2, 3][x as usize % 6])
+            let indices = (0..(new_size * 6) as u32)
+                .map(|x| (x / 6 * 4) as u16 + [0u16, 1, 2, 1, 2, 3][x as usize % 6])
                 .collect::<Vec<u16>>();
 
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.indice_buffer);
@@ -625,70 +736,69 @@ void main() {{
         self.buffer_size = new_size as u32;
     }
 
-    fn set_current_context(&mut self, window_id: WindowId) {
+    fn set_current_context(&mut self, window_id: WindowId) -> Result<(), glutin::error::Error> {
         let already_current = self
             .current_context
             .as_ref()
             .map_or(false, |x| x.0 == window_id);
         if !already_current {
             let previous_context = self.current_context.take();
-            unsafe {
-                self.current_context = Some((
-                    window_id,
-                    self.contexts
-                        .get_mut(&window_id)
-                        .unwrap()
-                        .take()
-                        .unwrap()
-                        .make_current(),
-                ));
-            }
+            self.current_context = Some((
+                window_id,
+                self.contexts
+                    .get_mut(&window_id)
+                    .unwrap()
+                    .take()
+                    .unwrap()
+                    .make_current()?,
+            ));
             if let Some((window, context)) = previous_context {
-                unsafe {
-                    *self.contexts.get_mut(&window).unwrap() = Some(context.treat_as_not_current());
-                }
+                *self.contexts.get_mut(&window).unwrap() = Some(context.make_not_current()?);
             }
+        } else {
+            // Make the current context current again to be sure that it is.
+            self.current_context.as_ref().unwrap().1.make_current()?;
         }
+        Ok(())
     }
 }
 impl SpriteRender for GlesSpriteRender {
     fn add_window(&mut self, window: &Window) {
-        if self.contexts.contains_key(&window.id()) {
-            log::warn!("Tried to add a window to SpriteRender twice");
-            return;
-        }
-
-        let config = GlConfig {
-            vsync: self.vsync,
-            share: Some(&self.current_context.as_ref().unwrap().1.context),
-            ..Default::default()
-        };
-        let context = unsafe { GlContext::create(window, config).unwrap() };
-
         let window_id = window.id();
-        self.contexts.insert(
-            window_id,
-            Some(Context {
-                context,
-                _p: Default::default(),
-            }),
-        );
 
-        self.set_current_context(window_id);
+        // TODO: propagate errors
+        let context = Context::new(
+            window,
+            self.vsync,
+            self.current_context.as_ref().map(|x| &x.1),
+        )
+        .unwrap();
+
+        self.contexts
+            .insert(window_id, Some(context.make_not_current().unwrap()));
+        self.set_current_context(window_id).unwrap();
 
         unsafe {
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::Enable(gl::BLEND);
         }
+
+        // TODO: create vao
     }
 
     fn remove_window(&mut self, window_id: WindowId) {
         let mut context = self.contexts.remove(&window_id).flatten();
         if let Some((id, _)) = self.current_context.as_mut() {
             if *id == window_id {
-                unsafe {
-                    context = Some(self.current_context.take().unwrap().1.make_not_current());
-                }
+                // TODO: propagate the error
+                context = Some(
+                    self.current_context
+                        .take()
+                        .unwrap()
+                        .1
+                        .make_not_current()
+                        .unwrap(),
+                );
             }
         }
         drop(context);
@@ -715,12 +825,11 @@ impl SpriteRender for GlesSpriteRender {
                     gl::NEAREST
                 } as i32,
             );
-            let data_ptr;
-            if data.len() as u32 >= width * height * 4 {
-                data_ptr = data.as_ptr() as *const c_void;
+            let data_ptr = if data.len() as u32 >= width * height * 4 {
+                data.as_ptr() as *const c_void
             } else {
-                data_ptr = std::ptr::null::<c_void>();
-            }
+                std::ptr::null::<c_void>()
+            };
             gl::TexImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -773,12 +882,11 @@ impl SpriteRender for GlesSpriteRender {
     }
 
     fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]) {
-        let data_ptr;
-        if data.len() as u32 >= width * height * 4 {
-            data_ptr = data.as_ptr() as *const c_void;
+        let data_ptr = if data.len() as u32 >= width * height * 4 {
+            data.as_ptr() as *const c_void
         } else {
-            data_ptr = std::ptr::null::<c_void>();
-        }
+            std::ptr::null::<c_void>()
+        };
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexImage2D(
@@ -796,12 +904,12 @@ impl SpriteRender for GlesSpriteRender {
     }
 
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a> {
-        self.set_current_context(window);
+        self.set_current_context(window).unwrap();
         Box::new(GlesRenderer { render: self })
     }
 
     fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
-        self.set_current_context(window_id);
+        self.set_current_context(window_id).unwrap();
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
         }
