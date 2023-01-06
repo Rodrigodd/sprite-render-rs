@@ -161,7 +161,7 @@ impl<'a> Renderer for GlesRenderer<'a> {
                 GlesSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
             }
 
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.vertex_buffer);
             gl::BufferSubData(
                 gl::ARRAY_BUFFER,
                 0,
@@ -193,6 +193,9 @@ impl<'a> Renderer for GlesRenderer<'a> {
             );
 
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.render.indice_buffer);
+            if let Some(vao) = self.render.vao() {
+                gl::BindVertexArray(vao);
+            }
             gl_check_error!("draw arrays instanced");
             gl::DrawElements(
                 gl::TRIANGLES,
@@ -226,7 +229,10 @@ pub enum Error {
     Glutin(glutin::error::Error),
     /// Either width or height were zero.
     BadDimensions,
-    CreateFailed,
+    /// glLString(GL_VERSION) returned null, or a invalid version string.
+    CouldNotQueryVersion,
+    /// OpenGL major version is smaller than 2.
+    UnsupportedOpenGlVersion,
 }
 impl From<glutin::error::Error> for Error {
     fn from(value: glutin::error::Error) -> Self {
@@ -238,7 +244,8 @@ struct Context<T> {
     context: T,
     surface: Surface<WindowSurface>,
     config: glutin::config::Config,
-    vao: u32,
+    /// It is None when OpenGL version is 2.0
+    vao: Option<u32>,
 }
 impl<T> Context<T> {
     fn map<U, F: FnOnce(T, &Surface<WindowSurface>) -> glutin::error::Result<U>>(
@@ -301,12 +308,6 @@ impl Context<PossiblyCurrentContext> {
 
         let context_attributes = {
             let builder = ContextAttributesBuilder::new();
-            // .with_context_api(
-            // glutin::context::ContextApi::Gles(Some(glutin::context::Version {
-            //     major: 2,
-            //     minor: 0,
-            // })),
-            // );
             let builder = if let Some(context) = shared {
                 builder.with_sharing(&context.context)
             } else {
@@ -340,7 +341,7 @@ impl Context<PossiblyCurrentContext> {
             context,
             surface,
             config,
-            vao: 0,
+            vao: None,
         })
     }
 
@@ -361,9 +362,10 @@ pub struct GlesSpriteRender {
     vsync: bool,
     contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
     current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
+    major_version: u8,
     shader_program: u32,
     indice_buffer: u32,
-    buffer: u32,
+    vertex_buffer: u32,
     /// Buffer size in number of sprites
     buffer_size: u32,
     textures: Vec<(u32, u32, u32)>, // id, width, height
@@ -393,14 +395,24 @@ impl GlesSpriteRender {
             }
         }
 
-        if let Some(renderer) = get_gl_string(gl::RENDERER) {
-            log::info!("Running on {}", renderer.to_string_lossy());
-        }
-        if let Some(version) = get_gl_string(gl::VERSION) {
+        let major_version = if let Some(version) = get_gl_string(gl::VERSION) {
             log::info!("OpenGL Version {}", version.to_string_lossy());
-        }
+            let Some((major_version, _)) = parse_version_number(version) else {
+                return Err(Error::CouldNotQueryVersion)
+            };
+            if major_version < 2 {
+                return Err(Error::UnsupportedOpenGlVersion);
+            }
+            major_version
+        } else {
+            return Err(Error::CouldNotQueryVersion);
+        };
+
         if let Some(shaders_version) = get_gl_string(gl::SHADING_LANGUAGE_VERSION) {
             log::info!("Shaders version on {}", shaders_version.to_string_lossy());
+        }
+        if let Some(renderer) = get_gl_string(gl::RENDERER) {
+            log::info!("Running on {}", renderer.to_string_lossy());
         }
 
         unsafe {
@@ -414,7 +426,7 @@ impl GlesSpriteRender {
         }
         log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
-        let (shader_program, buffer, vao, indice_buffer) = unsafe {
+        let (shader_program, vertex_buffer, vao, indice_buffer) = unsafe {
             log::trace!("compiling vert shader");
             let vert_shader =
                 Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
@@ -462,71 +474,14 @@ void main() {{
             log::trace!("generating buffers");
             let mut buffers = [0; 2];
             gl::GenBuffers(2, buffers.as_mut_ptr() as *mut GLuint);
-            let [buffer, indice_buffer] = buffers;
-            log::debug!("buffers: {} {}", buffer, indice_buffer);
-
-            let mut vao = 0;
-            gl::GenVertexArrays(1, &mut vao);
+            let [vertex_buffer, indice_buffer] = buffers;
+            log::debug!("buffers: {} {}", vertex_buffer, indice_buffer);
 
             gl_check_error!("gen buffers");
 
-            log::trace!("setting attributes");
-            gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+            let vao = Self::create_vao(shader_program, vertex_buffer, major_version);
 
-            let position = gl::GetAttribLocation(shader_program, cstr!("position")) as u32;
-            dbg!(position);
-            gl_check_error!("get position attribute location");
-            gl::VertexAttribPointer(
-                position,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                SPRITE_VERTEX_STRIDE as i32,
-                ptr::null(),
-            );
-            gl_check_error!("position vertex attrib pointer");
-            gl::EnableVertexAttribArray(position);
-            gl_check_error!("position enable vertex attrib array");
-
-            let uv = gl::GetAttribLocation(shader_program, cstr!("uv")) as u32;
-            dbg!(uv);
-            gl::VertexAttribPointer(
-                uv,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                SPRITE_VERTEX_STRIDE as i32,
-                (mem::size_of::<f32>() * 2) as *const c_void,
-            );
-            gl::EnableVertexAttribArray(uv);
-
-            let a_color = gl::GetAttribLocation(shader_program, cstr!("aColor")) as u32;
-            gl::VertexAttribPointer(
-                a_color,
-                4,
-                gl::UNSIGNED_BYTE,
-                gl::TRUE,
-                SPRITE_VERTEX_STRIDE as i32,
-                (mem::size_of::<f32>() * 4) as *const c_void,
-            );
-            gl::EnableVertexAttribArray(a_color);
-
-            let a_texture = gl::GetAttribLocation(shader_program, cstr!("aTexture")) as u32;
-            gl::VertexAttribPointer(
-                a_texture,
-                1,
-                gl::UNSIGNED_SHORT,
-                gl::FALSE,
-                SPRITE_VERTEX_STRIDE as i32,
-                (mem::size_of::<f32>() * 5) as *const c_void,
-            );
-            gl::EnableVertexAttribArray(a_texture);
-
-            gl_check_error!("set vertex attributes");
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            (shader_program, buffer, vao, indice_buffer)
+            (shader_program, vertex_buffer, vao, indice_buffer)
         };
 
         context.vao = vao;
@@ -541,8 +496,9 @@ void main() {{
             contexts,
             current_context: Some((window.id(), context)),
 
+            major_version,
             shader_program,
-            buffer,
+            vertex_buffer,
             indice_buffer,
             buffer_size: 0,
 
@@ -708,8 +664,7 @@ void main() {{
     fn reallocate_instance_buffer(&mut self, size_need: usize) {
         let new_size = size_need.next_power_of_two();
         unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.buffer);
-            dbg!(self.buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vertex_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
                 (new_size * SPRITE_VERTEX_STRIDE * 4) as GLsizeiptr,
@@ -734,6 +689,84 @@ void main() {{
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
         }
         self.buffer_size = new_size as u32;
+    }
+
+    /// get vao from the current context
+    fn vao(&self) -> Option<u32> {
+        self.current_context.as_ref().unwrap().1.vao
+    }
+
+    unsafe fn create_vao(
+        shader_program: u32,
+        vertex_buffer: u32,
+        major_version: u8,
+    ) -> Option<u32> {
+        let mut vao = None;
+        if major_version > 2 {
+            let mut vertex_array = 0;
+            gl::GenVertexArrays(1, &mut vertex_array);
+            gl::BindVertexArray(vertex_array);
+            vao = Some(vertex_array);
+        }
+
+        log::trace!("setting attributes");
+        gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
+
+        let position = gl::GetAttribLocation(shader_program, cstr!("position")) as u32;
+        gl_check_error!("get position attribute location");
+        gl::VertexAttribPointer(
+            position,
+            2,
+            gl::FLOAT,
+            gl::FALSE,
+            SPRITE_VERTEX_STRIDE as i32,
+            ptr::null(),
+        );
+        gl_check_error!("position vertex attrib pointer");
+        gl::EnableVertexAttribArray(position);
+        gl_check_error!("position enable vertex attrib array");
+
+        let uv = gl::GetAttribLocation(shader_program, cstr!("uv")) as u32;
+        gl::VertexAttribPointer(
+            uv,
+            2,
+            gl::FLOAT,
+            gl::FALSE,
+            SPRITE_VERTEX_STRIDE as i32,
+            (mem::size_of::<f32>() * 2) as *const c_void,
+        );
+        gl::EnableVertexAttribArray(uv);
+
+        let a_color = gl::GetAttribLocation(shader_program, cstr!("aColor")) as u32;
+        gl::VertexAttribPointer(
+            a_color,
+            4,
+            gl::UNSIGNED_BYTE,
+            gl::TRUE,
+            SPRITE_VERTEX_STRIDE as i32,
+            (mem::size_of::<f32>() * 4) as *const c_void,
+        );
+        gl::EnableVertexAttribArray(a_color);
+
+        let a_texture = gl::GetAttribLocation(shader_program, cstr!("aTexture")) as u32;
+        gl::VertexAttribPointer(
+            a_texture,
+            1,
+            gl::UNSIGNED_SHORT,
+            gl::FALSE,
+            SPRITE_VERTEX_STRIDE as i32,
+            (mem::size_of::<f32>() * 5) as *const c_void,
+        );
+        gl::EnableVertexAttribArray(a_texture);
+
+        gl_check_error!("set vertex attributes");
+
+        gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+        if major_version > 2 {
+            gl::BindVertexArray(0);
+        }
+
+        vao
     }
 
     fn set_current_context(&mut self, window_id: WindowId) -> Result<(), glutin::error::Error> {
@@ -762,6 +795,34 @@ void main() {{
         Ok(())
     }
 }
+
+/// Parse a OpenGL version string "<major>.<minor><whatever..>" (where major and minor are sequences
+/// of ascii digits) into tuple `(major, minor)`.
+fn parse_version_number(version: &CStr) -> Option<(u8, u8)> {
+    let bytes = version.to_bytes();
+    let Some(start_pos) = bytes.iter().position(|x| x.is_ascii_digit()) else {
+        return None;
+    };
+    let Some(( dot_pos , _)) = bytes
+        .iter()
+        .enumerate()
+        .skip(start_pos)
+        .find(|(_, x)| !x.is_ascii_digit())
+    else {
+        return None;
+    };
+    let end_pos = bytes
+        .iter()
+        .enumerate()
+        .skip(dot_pos + 1)
+        .find(|(_, x)| !x.is_ascii_digit())
+        .map(|x| x.0)
+        .unwrap_or(bytes.len());
+
+    let major = std::str::from_utf8(&bytes[start_pos..dot_pos]).expect("is pure ascii");
+    let minor = std::str::from_utf8(&bytes[dot_pos + 1..end_pos]).expect("is pure ascii");
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
 impl SpriteRender for GlesSpriteRender {
     fn add_window(&mut self, window: &Window) {
         let window_id = window.id();
@@ -783,7 +844,9 @@ impl SpriteRender for GlesSpriteRender {
             gl::Enable(gl::BLEND);
         }
 
-        // TODO: create vao
+        self.current_context.as_mut().unwrap().1.vao = unsafe {
+            Self::create_vao(self.shader_program, self.vertex_buffer, self.major_version)
+        };
     }
 
     fn remove_window(&mut self, window_id: WindowId) {

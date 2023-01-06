@@ -80,7 +80,7 @@ pub fn main() {
             if #[cfg(feature = "opengl")] {
                 Box::new(sprite_render::GLSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(feature = "opengles")] {
-                Box::new(())
+                Box::new(sprite_render::GlesSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
                 Box::new(sprite_render::WebGLSpriteRender::new(&window))
             } else {

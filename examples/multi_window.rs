@@ -98,12 +98,18 @@ fn main() {
         .unwrap();
 
     // create the SpriteRender
-    let mut render = {
+    let mut render: Box<dyn SpriteRender> = {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
-                sprite_render::GLSpriteRender::new(&window, true).unwrap()
+                Box::new(sprite_render::GLSpriteRender::new(&window, true).unwrap())
+            } else if #[cfg(feature = "opengles")] {
+                Box::new(sprite_render::GlesSpriteRender::new(&window, true).unwrap())
+            } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
+                Box::new(sprite_render::WebGLSpriteRender::new(&window))
             } else {
-                ()
+                log::warn!("No sprite-render backend was choosen. \
+                           Enable one of them by enabling a feature, like `--features=opengl`");
+                Box::new(())
             }
         }
     };
