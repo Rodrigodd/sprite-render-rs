@@ -37,12 +37,25 @@ pub fn main() {
     #[cfg(target_arch = "wasm32")]
     wasm_logger::init(wasm_logger::Config::new(log::Level::Debug));
 
+    let mut args = std::env::args();
+    let mut number_of_sprites = 100;
+    let mut sprite_size = 0.2f32;
+    let _ = args.next();
+    if let Some(arg) = args.next() {
+        let (s, n) = arg
+            .split_once(',')
+            .expect("expected arg in the format <size>,<number>");
+        dbg!((n, s));
+        number_of_sprites = n.parse().unwrap();
+        sprite_size = s.parse().unwrap();
+    }
+
     log::info!("starting main example!!");
 
     let event_loop = EventLoop::new();
     let wb = WindowBuilder::new()
         .with_title("Hello world!")
-        .with_inner_size(LogicalSize::new(800.0f32, 400.0));
+        .with_inner_size(LogicalSize::new(600.0f32, 600.0));
 
     #[cfg(target_arch = "wasm32")]
     let wb = {
@@ -82,8 +95,6 @@ pub fn main() {
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    let mut number_of_sprites = 100;
-    let mut sprite_size = 0.2f32;
 
     let mut instances: Box<[SpriteInstance]> =
         vec![SpriteInstance::default(); 16384].into_boxed_slice();
