@@ -777,7 +777,6 @@ impl SpriteRender for GLSpriteRender {
             self.current_context.as_ref().map(|x| &x.1),
         )
         .unwrap();
-        context.vao = unsafe { Self::create_vao(self.vertex_buffer, self.instance_buffer) };
 
         self.contexts
             .insert(window_id, Some(context.make_not_current().unwrap()));
