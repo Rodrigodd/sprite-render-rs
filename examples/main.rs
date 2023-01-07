@@ -47,6 +47,7 @@ pub fn main() {
     }
 
     log::info!("starting main example!!");
+    println!("starting main example!!");
 
     let event_loop = EventLoop::new();
     let wb = WindowBuilder::new()
@@ -73,12 +74,10 @@ pub fn main() {
     // create the SpriteRender
     let mut render: Box<dyn SpriteRender> = {
         cfg_if::cfg_if! {
-            if #[cfg(feature = "opengl")] {
-                Box::new(sprite_render::GLSpriteRender::new(&window, true).unwrap())
-            } else if #[cfg(all(feature = "opengles", target_os = "android"))] {
+            if #[cfg(all(feature = "opengl", target_os = "android"))] {
                 Box::new(())
-            } else if #[cfg(all(feature = "opengles", not(target_os = "android")))] {
-                Box::new(sprite_render::GlesSpriteRender::new(&window, true).unwrap())
+            } else if #[cfg(all(feature = "opengl", not(target_os = "android")))] {
+                Box::new(sprite_render::GlSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
                 Box::new(sprite_render::WebGLSpriteRender::new(&window))
             } else {
@@ -142,7 +141,7 @@ pub fn main() {
             #[cfg(target_os = "android")]
             Event::Resumed => {
                 log::info!("creating sprite-render");
-                render = sprite_render::GlesSpriteRender::new(&window, true)
+                render = sprite_render::GlSpriteRender::new(&window, true)
                     .map(|x| Box::new(x) as Box<dyn SpriteRender>)
                     .unwrap_or_else(|x| {
                         log::error!("initializing sprite-render failed: {:?}", x);
@@ -363,15 +362,17 @@ pub fn main() {
             }
 
             Event::RedrawRequested(_) => {
-                // draw
                 // log::debug!("draw!!");
                 frame_count += 1;
+                if frame_count - change_frame == 120 {
+                    change_clock = Instant::now();
+                }
                 if frame_count % 60 == 0 {
                     let elapsed = clock.elapsed().as_secs_f32();
                     clock = Instant::now();
                     let fps = 60.0 / elapsed;
-                    let mean_fps =
-                        (frame_count - change_frame) as f32 / change_clock.elapsed().as_secs_f32();
+                    let mean_fps = (frame_count - change_frame - 120) as f32
+                        / change_clock.elapsed().as_secs_f32();
                     let title = format!(
                         "SpriteRender | {:9.2} FPS ({:7.3} ms) | \
                                         {} sprites with size {:.3} | mean: {:9.2} FPS ({:7.3} ms)",
@@ -385,11 +386,6 @@ pub fn main() {
                     window.set_title(&title);
                     log::debug!("{}", title);
                 }
-                // let elapsed = frame_clock.elapsed().as_secs_f32();
-                // println!("elapsed: {:5.2}, sleep: {:5.2}", elapsed*1000.0, (1.0/60.0 - elapsed)*1000.0);
-                // frame_clock = Instant::now();
-                // if elapsed < 1.0/60.0 {
-                // std::thread::sleep(Duration::from_secs_f32(1.0/60.0));
                 render
                     .render(window.id())
                     .clear_screen(&[0.0f32, 0.0, 1.0, 1.0])

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
+    io::{self, Write},
     mem,
     num::NonZeroU32,
     os::raw::c_void,
@@ -27,59 +28,52 @@ mod gl {
 }
 use gl::types::*;
 
-const VERTEX_STRIDE: GLsizei = 4 * mem::size_of::<GLfloat>() as GLsizei;
-const INSTANCE_STRIDE: GLsizei = 16 * mem::size_of::<GLfloat>() as GLsizei;
-const VERTICES: [f32; 16] = [
-    // bottom left
-    -0.5, -0.5, 0.0, 0.0, // bottom right
-    0.5, -0.5, 1.0, 0.0, // top left
-    -0.5, 0.5, 0.0, 1.0, // top right
-    0.5, 0.5, 1.0, 1.0,
-];
+const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
-#version 330 core
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec2 aUv;
-
-layout (location = 2) in vec2 aSize;
-layout (location = 3) in float aAngle;
-layout (location = 4) in vec4 aUvRect;
-layout (location = 5) in vec4 aColor;
-layout (location = 6) in vec2 aOffset;
-layout (location = 7) in int aTextureIndex;
+#version 100
+attribute vec2 position;
+attribute vec2 uv;
+attribute vec4 aColor;
+attribute float aTexture;
 
 uniform mat3 view;
 
-out vec4 color;
-out vec2 TexCoord;
-flat out int TextureIndex;
+varying vec4 color;
+varying vec2 TexCoord;
+varying float textureIndex;
 
-void main()
-{
-    float s = sin(aAngle);
-	float c = cos(aAngle);
-	mat2 m = mat2(c, s, -s, c);
-    vec2 pos = aOffset + m*(aPos*aSize);
-    gl_Position = vec4((vec3(pos, 1.0) * view).xy, 0.0, 1.0);
+void main() {
+    gl_Position = vec4((vec3(position, 1.0) * view).xy, 0.0, 1.0);
     gl_Position.y *= -1.0;
     color = aColor;
-    TexCoord = aUvRect.xy + aUv*aUvRect.zw;
-    TextureIndex = aTextureIndex;
+    TexCoord = uv;
+    textureIndex = aTexture;
 }
 "#;
 
-unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> bool {
+unsafe fn transmute_slice<T, U>(slice: &[T]) -> &[U] {
+    debug_assert!(
+        mem::align_of::<T>() % mem::size_of::<U>() == 0,
+        "T alignment must be multiple of U alignment"
+    );
+    debug_assert!(
+        mem::size_of::<T>() % mem::size_of::<U>() == 0,
+        "T size must be multiple of U size"
+    );
+    std::slice::from_raw_parts(
+        slice.as_ptr() as *const T as *const U,
+        slice.len() * mem::size_of::<T>() / mem::size_of::<U>(),
+    )
+}
+
+unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> u32 {
     let mut error_code = gl::GetError();
-    let mut count = 0;
-    log::debug!("run {}:{}", label, line);
     while error_code != gl::NO_ERROR {
         let error = match error_code {
             gl::INVALID_ENUM => "INVALID_ENUM",
             gl::INVALID_VALUE => "INVALID_VALUE",
             gl::INVALID_OPERATION => "INVALID_OPERATION",
-            gl::STACK_OVERFLOW => "STACK_OVERFLOW",
-            gl::STACK_UNDERFLOW => "STACK_UNDERFLOW",
             gl::OUT_OF_MEMORY => "OUT_OF_MEMORY",
             gl::INVALID_FRAMEBUFFER_OPERATION => "INVALID_FRAMEBUFFER_OPERATION",
             _ => "unknown GL error code",
@@ -88,12 +82,8 @@ unsafe fn gl_check_error_(file: &str, line: u32, label: &str) -> bool {
         log::error!("[{}:{:4}] {}: {}", file, line, label, error);
 
         error_code = gl::GetError();
-        count += 1;
-        if count > 20 {
-            panic!("glGetError repeat 20 times already!");
-        }
     }
-    count > 0
+    error_code
 }
 
 macro_rules! gl_check_error {
@@ -102,15 +92,21 @@ macro_rules! gl_check_error {
     )
 }
 
+macro_rules! cstr {
+    ($s:literal) => {
+        (concat!($s, "\0").as_bytes().as_ptr() as *const GLchar)
+    };
+}
+
 unsafe fn get_uniform_location(shader_program: u32, name: &str) -> i32 {
     let s = CString::new(name).unwrap();
     gl::GetUniformLocation(shader_program, s.as_ptr())
 }
 
-pub struct GLRenderer<'a> {
-    render: &'a mut GLSpriteRender,
+pub struct GlRenderer<'a> {
+    render: &'a mut GlSpriteRender,
 }
-impl<'a> Renderer for GLRenderer<'a> {
+impl<'a> Renderer for GlRenderer<'a> {
     fn clear_screen(&mut self, color: &[f32; 4]) -> &mut dyn Renderer {
         log::trace!(
             "clear screen to [{:5.3}, {:5.3}, {:5.3}, {:5.3}]",
@@ -121,9 +117,7 @@ impl<'a> Renderer for GLRenderer<'a> {
         );
         unsafe {
             gl::ClearColor(color[0], color[1], color[2], color[3]);
-            gl_check_error!("glClearColor");
             gl::Clear(gl::COLOR_BUFFER_BIT);
-            gl_check_error!("glClear BUFFER BIT");
         }
         self
     }
@@ -137,73 +131,49 @@ impl<'a> Renderer for GLRenderer<'a> {
         if sprites.is_empty() {
             return self;
         }
-        if sprites.len() > self.render.instance_buffer_size as usize {
+        if sprites.len() > self.render.buffer_size as usize {
             self.render.reallocate_instance_buffer(sprites.len());
         }
 
         self.render.texture_unit_map.clear();
         unsafe {
-            log::debug!("bind buffer {:x}", self.render.instance_buffer);
-            // copy sprites into gpu memory
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.instance_buffer);
-            gl_check_error!("glBindBuffer");
-            loop {
-                log::debug!("map buffer range");
-                let mut cursor = gl::MapBufferRange(
-                    gl::ARRAY_BUFFER,
-                    0,
-                    (sprites.len() * INSTANCE_STRIDE as usize) as GLsizeiptr,
-                    gl::MAP_WRITE_BIT,
-                ) as *mut u8;
-                gl_check_error!("glMapBufferRange");
+            let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
 
-                for sprite in sprites {
-                    let texture_unit = if let Some(t) =
-                        self.render.texture_unit_map.get(&sprite.texture)
+            for sprite in sprites {
+                let texture_unit = if let Some(t) =
+                    self.render.texture_unit_map.get(&sprite.texture)
+                {
+                    *t
+                } else {
+                    if self.render.texture_unit_map.len() == self.render.max_texture_units as usize
                     {
-                        *t
-                    } else {
-                        if self.render.texture_unit_map.len()
-                            == self.render.max_texture_units as usize
-                        {
-                            unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
-                        }
-                        gl::ActiveTexture(gl::TEXTURE0 + self.render.texture_unit_map.len() as u32);
-                        gl_check_error!("glActiveTexture");
-                        gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
-                        gl_check_error!("glBindTexture");
-                        self.render
-                            .texture_unit_map
-                            .insert(sprite.texture, self.render.texture_unit_map.len() as u32);
-                        self.render.texture_unit_map.len() as u32 - 1
-                    };
-                    ptr::copy_nonoverlapping(
-                        sprite as *const _ as *const u8,
-                        cursor,
-                        mem::size_of::<SpriteInstance>(),
-                    );
-                    ptr::copy_nonoverlapping(
-                        &texture_unit as *const u32 as *const u8,
-                        cursor.add(memoffset::offset_of!(SpriteInstance, texture)),
-                        mem::size_of::<u32>(),
-                    );
-                    cursor = cursor.add(INSTANCE_STRIDE as usize);
-                }
-
-                log::debug!("unmap buffer");
-                let mut b = gl::UnmapBuffer(gl::ARRAY_BUFFER) == gl::TRUE;
-                gl_check_error!("glUnmapBuffer");
-                b = gl_check_error!(
-                    "instance_buffer_write({})",
-                    (sprites.len() * mem::size_of::<SpriteInstance>()) as GLsizeiptr
-                ) || b;
-                if b {
-                    break;
-                }
+                        unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
+                    }
+                    gl::ActiveTexture(gl::TEXTURE0 + self.render.texture_unit_map.len() as u32);
+                    log::trace!("active texture");
+                    gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
+                    log::trace!("bind texture");
+                    self.render
+                        .texture_unit_map
+                        .insert(sprite.texture, self.render.texture_unit_map.len() as u32);
+                    self.render.texture_unit_map.len() as u32 - 1
+                };
+                GlSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
             }
-            self.render.texture_unit_map.clear();
-            log::debug!("unbind buffer {:x}", self.render.instance_buffer);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.vertex_buffer);
+            gl::BufferSubData(
+                gl::ARRAY_BUFFER,
+                0,
+                data.len() as GLsizeiptr,
+                data.as_ptr() as *const c_void,
+            );
+            log::trace!(
+                "buffer subdata: len {}, buffer size {}",
+                data.len(),
+                self.render.buffer_size
+            );
+
             // render
             log::debug!("bind program");
             gl::UseProgram(self.render.shader_program);
@@ -221,11 +191,21 @@ impl<'a> Renderer for GLRenderer<'a> {
                 gl::FALSE,
                 camera.view().as_ptr(),
             );
-            log::debug!("bind vertex");
-            gl::BindVertexArray(self.render.vao());
+
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.render.indice_buffer);
+            if let Some(vao) = self.render.vao() {
+                gl::BindVertexArray(vao);
+            }
             gl_check_error!("draw arrays instanced");
-            log::debug!("draw");
-            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, sprites.len() as i32);
+            gl::DrawElements(
+                gl::TRIANGLES,
+                sprites.len() as i32 * 6,
+                gl::UNSIGNED_SHORT,
+                ptr::null(),
+            );
+
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
 
             gl_check_error!("end frame");
         }
@@ -234,7 +214,6 @@ impl<'a> Renderer for GLRenderer<'a> {
 
     fn finish(&mut self) {
         log::trace!("finish");
-        // TODO: return error
         self.render
             .current_context
             .as_ref()
@@ -250,7 +229,10 @@ pub enum Error {
     Glutin(glutin::error::Error),
     /// Either width or height were zero.
     BadDimensions,
-    CreateFailed,
+    /// glLString(GL_VERSION) returned null, or a invalid version string.
+    CouldNotQueryVersion,
+    /// OpenGL major version is smaller than 2.
+    UnsupportedOpenGlVersion,
 }
 impl From<glutin::error::Error> for Error {
     fn from(value: glutin::error::Error) -> Self {
@@ -262,7 +244,8 @@ struct Context<T> {
     context: T,
     surface: Surface<WindowSurface>,
     config: glutin::config::Config,
-    vao: u32,
+    /// It is None when OpenGL version is 2.0
+    vao: Option<u32>,
 }
 impl<T> Context<T> {
     fn map<U, F: FnOnce(T, &Surface<WindowSurface>) -> glutin::error::Result<U>>(
@@ -271,15 +254,15 @@ impl<T> Context<T> {
     ) -> glutin::error::Result<Context<U>> {
         let Context {
             context,
-            vao,
             surface,
             config,
+            vao,
         } = self;
         Ok(Context {
             context: f(context, &surface)?,
-            vao,
             surface,
             config,
+            vao,
         })
     }
 }
@@ -333,6 +316,12 @@ impl Context<PossiblyCurrentContext> {
 
         let context_attributes = {
             let builder = ContextAttributesBuilder::new();
+            // .with_context_api(
+            // glutin::context::ContextApi::Gles(Some(glutin::context::Version {
+            //     major: 2,
+            //     minor: 0,
+            // })),
+            // );
             let builder = if let Some(context) = shared {
                 builder.with_sharing(&context.context)
             } else {
@@ -366,7 +355,7 @@ impl Context<PossiblyCurrentContext> {
             context,
             surface,
             config,
-            vao: 0,
+            vao: None,
         })
     }
 
@@ -383,20 +372,22 @@ impl Context<PossiblyCurrentContext> {
     }
 }
 
-pub struct GLSpriteRender {
+pub struct GlSpriteRender {
     vsync: bool,
     contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
     current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
+    major_version: u8,
     shader_program: u32,
+    indice_buffer: u32,
     vertex_buffer: u32,
-    instance_buffer: u32,
-    instance_buffer_size: u32,
+    /// Buffer size in number of sprites
+    buffer_size: u32,
     textures: Vec<(u32, u32, u32)>, // id, width, height
     /// maps a texture to a texture unit
     texture_unit_map: HashMap<u32, u32>,
     max_texture_units: i32,
 }
-impl GLSpriteRender {
+impl GlSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     // TODO: build a better error handling!!!!
     pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
@@ -411,33 +402,6 @@ impl GLSpriteRender {
                 .cast()
         });
 
-        unsafe {
-            extern "system" fn callback(
-                _source: GLenum,
-                gltype: GLenum,
-                _id: GLuint,
-                severity: GLenum,
-                _length: GLsizei,
-                message: *const GLchar,
-                _: *mut c_void,
-            ) {
-                let error = if gltype == gl::DEBUG_TYPE_ERROR {
-                    "** GL ERROR **"
-                } else {
-                    ""
-                };
-                log::error!(
-                    "GL CALLBACK: {} type = 0x{:x}, severity = 0x{:x}, message = {}",
-                    error,
-                    gltype,
-                    severity,
-                    unsafe { CStr::from_ptr(message).to_string_lossy() }
-                )
-            }
-            gl::Enable(gl::DEBUG_OUTPUT);
-            gl::DebugMessageCallback(Some(callback), ptr::null());
-        }
-
         fn get_gl_string(variant: gl::types::GLenum) -> Option<&'static CStr> {
             unsafe {
                 let s = gl::GetString(variant);
@@ -445,14 +409,24 @@ impl GLSpriteRender {
             }
         }
 
-        if let Some(renderer) = get_gl_string(gl::RENDERER) {
-            log::info!("Running on {}", renderer.to_string_lossy());
-        }
-        if let Some(version) = get_gl_string(gl::VERSION) {
+        let major_version = if let Some(version) = get_gl_string(gl::VERSION) {
             log::info!("OpenGL Version {}", version.to_string_lossy());
-        }
+            let Some((major_version, _)) = parse_version_number(version) else {
+                return Err(Error::CouldNotQueryVersion)
+            };
+            if major_version < 2 {
+                return Err(Error::UnsupportedOpenGlVersion);
+            }
+            major_version
+        } else {
+            return Err(Error::CouldNotQueryVersion);
+        };
+
         if let Some(shaders_version) = get_gl_string(gl::SHADING_LANGUAGE_VERSION) {
             log::info!("Shaders version on {}", shaders_version.to_string_lossy());
+        }
+        if let Some(renderer) = get_gl_string(gl::RENDERER) {
+            log::info!("Running on {}", renderer.to_string_lossy());
         }
 
         unsafe {
@@ -466,158 +440,82 @@ impl GLSpriteRender {
         }
         log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
-        let (shader_program, vao, instance_buffer, vertex_buffer) = unsafe {
-            // Setup shader compilation checks
-            let mut success = i32::from(gl::FALSE);
-            let mut info_log = vec![0; 512];
+        let (shader_program, vertex_buffer, vao, indice_buffer) = unsafe {
+            log::trace!("compiling vert shader");
+            let vert_shader =
+                Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
 
-            // Vertex shader
-            let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
-            let c_str_vert = CString::new(VERTEX_SHADER_SOURCE.as_bytes()).unwrap();
-            gl::ShaderSource(vertex_shader, 1, &c_str_vert.as_ptr(), ptr::null());
-            gl::CompileShader(vertex_shader);
-
-            // Check for shader compilation errors
-            gl::GetShaderiv(vertex_shader, gl::COMPILE_STATUS, &mut success);
-            if success != gl::TRUE as i32 {
-                let mut len = 0;
-                gl::GetShaderInfoLog(
-                    vertex_shader,
-                    info_log.len() as i32,
-                    &mut len,
-                    info_log.as_mut_ptr() as *mut GLchar,
-                );
-                panic!(
-                    "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n{}",
-                    str::from_utf8(&info_log[0..len as usize]).unwrap()
-                );
-            }
-
-            // Fragment shader
-            let fragment_shader = gl::CreateShader(gl::FRAGMENT_SHADER);
-            let c_str_frag = CString::new(
-                format!(
+            log::trace!("compiling vert shader");
+            let frag_shader = Self::compile_shader(
+                gl::FRAGMENT_SHADER,
+                &format!(
                     r#"
-#version 330 core
-#define MAX_TEXTURE_IMAGE_UNITS {MAX_TEXTURE_IMAGE_UNITS}
-out vec4 FragColor;
-
-in vec4 color;
-in vec2 TexCoord;
-flat in int TextureIndex;
+#version 100
+#define MAX_TEXTURE_IMAGE_UNITS {}
+precision mediump float;
 
 uniform sampler2D text[MAX_TEXTURE_IMAGE_UNITS];
 
-void main()
-{{
+varying vec4 color;
+varying vec2 TexCoord;
+varying float textureIndex;
+
+void main() {{
+    int t = int(textureIndex);
     vec4 textureColor;
-    {textureColor} // textureColor = texture(text[TextureIndex], TexCoord);
+    for (int i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++ ) {{
+        if (i == t) textureColor = texture2D(text[i], TexCoord);
+    }}
+    
     if (textureColor.a == 0.0 || color.a == 0.0) {{
         discard;
     }}
-    FragColor = color*textureColor;
+    gl_FragColor = textureColor*color;
 }}
 "#,
-                    MAX_TEXTURE_IMAGE_UNITS = max_texture_units,
-                    textureColor = (0..max_texture_units)
-                        .map(|i| format!("if (TextureIndex == {i}) textureColor = texture(text[{i}], TexCoord); \nelse ", i = i))
-                        .chain(std::iter::once("textureColor = vec4(0.0);".to_string()))
-                        .fold(String::new(), |a, b| a + &b)
-                )
-                .as_bytes(),
+                    max_texture_units,
+                ),
             )
             .unwrap();
 
-            gl::ShaderSource(fragment_shader, 1, &c_str_frag.as_ptr(), ptr::null());
-            gl::CompileShader(fragment_shader);
+            log::trace!("linking shader");
+            let shader_program = Self::link_program(vert_shader, frag_shader).unwrap();
 
-            // Check for shader compilation errors
-            gl::GetShaderiv(fragment_shader, gl::COMPILE_STATUS, &mut success);
-            if success != i32::from(gl::TRUE) {
-                let mut len = 0;
-                gl::GetShaderInfoLog(
-                    fragment_shader,
-                    info_log.len() as i32,
-                    &mut len,
-                    info_log.as_mut_ptr() as *mut GLchar,
-                );
-                panic!(
-                    "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n{}",
-                    str::from_utf8(&info_log[0..len as usize]).unwrap()
-                );
-            }
+            gl_check_error!("linked program");
 
-            // Link Shaders
-            let shader_program = gl::CreateProgram();
-            gl::AttachShader(shader_program, vertex_shader);
-            gl::AttachShader(shader_program, fragment_shader);
-            gl::LinkProgram(shader_program);
+            gl::UseProgram(shader_program);
 
-            // Check for linking errors
-            gl::GetProgramiv(shader_program, gl::LINK_STATUS, &mut success);
-            if success != i32::from(gl::TRUE) {
-                gl::GetProgramInfoLog(
-                    shader_program,
-                    512,
-                    ptr::null_mut(),
-                    info_log.as_mut_ptr() as *mut GLchar,
-                );
-                panic!(
-                    "ERROR::SHADER::PROGRAM::COMPILATION_FAILED\n{}",
-                    &String::from_utf8_lossy(&info_log)
-                );
-            }
-            gl::DeleteShader(vertex_shader);
-            gl::DeleteShader(fragment_shader);
+            log::trace!("generating buffers");
+            let mut buffers = [0; 2];
+            gl::GenBuffers(2, buffers.as_mut_ptr() as *mut GLuint);
+            let [vertex_buffer, indice_buffer] = buffers;
+            log::debug!("buffers: {} {}", vertex_buffer, indice_buffer);
 
-            // Set up vao and vbos
+            gl_check_error!("gen buffers");
 
-            // create instance buffer
+            let vao = Self::create_vao(shader_program, vertex_buffer, major_version);
 
-            let mut instance_buffer = 0;
-
-            gl::GenBuffers(1, &mut instance_buffer);
-
-            // create vertex buffer
-            let mut vertex_buffer = 0;
-
-            gl::GenBuffers(1, &mut vertex_buffer);
-            gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (VERTICES.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
-                &VERTICES[0] as *const f32 as *const c_void,
-                gl::STATIC_DRAW,
-            );
-
-            let vao = Self::create_vao(vertex_buffer, instance_buffer);
-
-            // Wireframe
-            // gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-
-            (shader_program, vao, instance_buffer, vertex_buffer)
+            (shader_program, vertex_buffer, vao, indice_buffer)
         };
 
         context.vao = vao;
 
-        unsafe {
-            if gl_check_error!("SpriteRender::new") {
-                return Err(Error::CreateFailed);
-            }
-        }
-
+        log::trace!("finished sprite-render creation");
         let mut contexts = HashMap::new();
         let window_id = window.id();
         contexts.insert(window_id, None);
 
         let mut sprite_render = Self {
             vsync,
-            shader_program,
             contexts,
             current_context: Some((window.id(), context)),
+
+            major_version,
+            shader_program,
             vertex_buffer,
-            instance_buffer,
-            instance_buffer_size: 0,
+            indice_buffer,
+            buffer_size: 0,
+
             textures: Vec::new(),
             texture_unit_map: HashMap::new(),
             max_texture_units,
@@ -628,122 +526,259 @@ void main()
         Ok(sprite_render)
     }
 
+    unsafe fn compile_shader(shader_type: u32, source: &str) -> Result<u32, String> {
+        log::trace!("CreateShader");
+        if !gl::CreateShader::is_loaded() {
+            panic!("CreateShader is not loaded!!");
+        }
+        let shader = gl::CreateShader(shader_type);
+        log::trace!("CString");
+        let c_str = CString::new(source).unwrap();
+        log::trace!("ShaderSoruce");
+        gl::ShaderSource(shader, 1, &c_str.as_ptr(), ptr::null());
+        log::trace!("CompileShader");
+        gl::CompileShader(shader);
+
+        // Check for shader compilation errors
+        let mut success = i32::from(gl::FALSE);
+        log::trace!("GetShaderiv");
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
+        if success == gl::FALSE as i32 {
+            let mut len = 0;
+            log::trace!("GetShaderiv(INFO_LOG_LENGTH)");
+            gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+            // len includes the NULL character
+            let mut buffer = vec![0u8; len as usize];
+
+            log::trace!("GetShaderInfoLog (len {})", len);
+            gl::GetShaderInfoLog(shader, len, &mut len, buffer.as_mut_ptr() as *mut GLchar);
+
+            log::trace!("DeleteShader");
+            gl::DeleteShader(shader);
+
+            let info_log = if len == 0 {
+                String::from("Unknown error creating shader")
+            } else {
+                String::from_utf8_lossy(&buffer[0..len as usize]).into_owned()
+            }
+            .replace("\\n", "\n");
+
+            log::error!(
+                "failing compiling {} shader: {}",
+                match shader_type {
+                    gl::VERTEX_SHADER => "vertex",
+                    gl::FRAGMENT_SHADER => "fragment",
+                    _ => "unknown",
+                },
+                info_log
+            );
+            Err(info_log)
+        } else {
+            Ok(shader)
+        }
+    }
+
+    unsafe fn link_program(vertex_shader: u32, fragment_shader: u32) -> Result<u32, String> {
+        let shader_program = gl::CreateProgram();
+        gl::AttachShader(shader_program, vertex_shader);
+        gl::AttachShader(shader_program, fragment_shader);
+        gl::LinkProgram(shader_program);
+
+        // Check for linking errors
+        let mut success = i32::from(gl::FALSE);
+        gl::GetProgramiv(shader_program, gl::LINK_STATUS, &mut success);
+        let result = if success != i32::from(gl::TRUE) {
+            let mut len = 0;
+            let mut info_log = [0u8; 512];
+            gl::GetProgramInfoLog(
+                shader_program,
+                info_log.len() as i32,
+                (&mut len) as *mut GLsizei,
+                info_log.as_mut_ptr() as *mut GLchar,
+            );
+            let info_log = if len == 0 {
+                String::from("Unknown error linking shader")
+            } else {
+                String::from_utf8_lossy(&info_log[0..len as usize]).into_owned()
+            }
+            .replace("\\n", "\n");
+            Err(info_log)
+        } else {
+            Ok(shader_program)
+        };
+
+        gl::DeleteShader(vertex_shader);
+        gl::DeleteShader(fragment_shader);
+
+        result
+    }
+
+    unsafe fn write_sprite<W: Write>(
+        writer: &mut W,
+        sprite: &SpriteInstance,
+        texture: u16,
+    ) -> io::Result<()> {
+        let cos = sprite.angle.cos();
+        let sin = sprite.angle.sin();
+        let width = sprite.get_width() / 2.0;
+        let height = sprite.get_height() / 2.0;
+        let x = sprite.get_x();
+        let y = sprite.get_y();
+        let u = sprite.uv_rect[0];
+        let v = sprite.uv_rect[1];
+        let w = sprite.uv_rect[2];
+        let h = sprite.uv_rect[3];
+
+        // bottom left
+        writer.write_all(transmute_slice(&[
+            -cos * width + sin * height + x,
+            -sin * width - cos * height + y,
+            u,
+            v,
+        ]))?;
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
+
+        // bottom right
+        writer.write_all(transmute_slice(&[
+            cos * width + sin * height + x,
+            sin * width - cos * height + y,
+            u + w,
+            v,
+        ]))?;
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
+
+        // top left
+        writer.write_all(transmute_slice(&[
+            -cos * width - sin * height + x,
+            -sin * width + cos * height + y,
+            u,
+            v + h,
+        ]))?;
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
+
+        // top right
+        writer.write_all(transmute_slice(&[
+            cos * width - sin * height + x,
+            sin * width + cos * height + y,
+            u + w,
+            v + h,
+        ]))?;
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
+        Ok(())
+    }
+
     fn reallocate_instance_buffer(&mut self, size_need: usize) {
         let new_size = size_need.next_power_of_two();
         unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.instance_buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vertex_buffer);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (new_size * INSTANCE_STRIDE as usize) as GLsizeiptr,
+                (new_size * SPRITE_VERTEX_STRIDE * 4) as GLsizeiptr,
                 ptr::null(),
                 gl::DYNAMIC_DRAW,
             );
-            gl_check_error!(
-                "reallocate_instance_buffer({})",
-                (new_size * INSTANCE_STRIDE as usize) as GLsizeiptr
+            gl_check_error!("reallocate buffer to {}", new_size);
+
+            let indices = (0..(new_size * 6) as u32)
+                .map(|x| (x / 6 * 4) as u16 + [0u16, 1, 2, 1, 2, 3][x as usize % 6])
+                .collect::<Vec<u16>>();
+
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.indice_buffer);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (indices.len() * mem::size_of::<u16>()) as GLsizeiptr,
+                &*indices as *const _ as *const c_void,
+                gl::DYNAMIC_DRAW,
             );
+            gl_check_error!("reallocate indice buffer to {}", new_size);
+
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
         }
-        self.instance_buffer_size = new_size as u32;
+        self.buffer_size = new_size as u32;
     }
 
     /// get vao from the current context
-    fn vao(&self) -> u32 {
+    fn vao(&self) -> Option<u32> {
         self.current_context.as_ref().unwrap().1.vao
     }
 
-    unsafe fn create_vao(vertex_buffer: u32, instance_buffer: u32) -> u32 {
-        let mut vao = 0;
+    unsafe fn create_vao(
+        shader_program: u32,
+        vertex_buffer: u32,
+        major_version: u8,
+    ) -> Option<u32> {
+        let mut vao = None;
+        if major_version > 2 {
+            let mut vertex_array = 0;
+            gl::GenVertexArrays(1, &mut vertex_array);
+            gl::BindVertexArray(vertex_array);
+            vao = Some(vertex_array);
+        }
 
-        gl::GenVertexArrays(1, &mut vao);
-
-        gl::BindVertexArray(vao);
+        log::trace!("setting attributes");
         gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
 
-        // 0, 1 are per vertex
-        gl::EnableVertexAttribArray(0); // aPos
-        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, VERTEX_STRIDE, ptr::null());
-
-        gl::EnableVertexAttribArray(1); // aUv
+        let position = gl::GetAttribLocation(shader_program, cstr!("position")) as u32;
+        gl_check_error!("get position attribute location");
         gl::VertexAttribPointer(
-            1,
+            position,
             2,
             gl::FLOAT,
             gl::FALSE,
-            VERTEX_STRIDE,
+            SPRITE_VERTEX_STRIDE as i32,
+            ptr::null(),
+        );
+        gl_check_error!("position vertex attrib pointer");
+        gl::EnableVertexAttribArray(position);
+        gl_check_error!("position enable vertex attrib array");
+
+        let uv = gl::GetAttribLocation(shader_program, cstr!("uv")) as u32;
+        gl::VertexAttribPointer(
+            uv,
+            2,
+            gl::FLOAT,
+            gl::FALSE,
+            SPRITE_VERTEX_STRIDE as i32,
             (mem::size_of::<f32>() * 2) as *const c_void,
         );
+        gl::EnableVertexAttribArray(uv);
 
-        // 2, 3, 4 are per instance
-        gl::BindBuffer(gl::ARRAY_BUFFER, instance_buffer);
-
-        gl::EnableVertexAttribArray(2); // aSize
+        let a_color = gl::GetAttribLocation(shader_program, cstr!("aColor")) as u32;
         gl::VertexAttribPointer(
-            2,
-            2,
-            gl::FLOAT,
-            gl::FALSE,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, scale) as *const c_void,
-        );
-        gl::VertexAttribDivisor(2, 1);
-
-        gl::EnableVertexAttribArray(3); // aAngle
-        gl::VertexAttribPointer(
-            3,
-            1,
-            gl::FLOAT,
-            gl::FALSE,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, angle) as *const c_void,
-        );
-        gl::VertexAttribDivisor(3, 1);
-
-        gl::EnableVertexAttribArray(4); // aUvRect
-        gl::VertexAttribPointer(
-            4,
-            4,
-            gl::FLOAT,
-            gl::FALSE,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, uv_rect) as *const c_void,
-        );
-        gl::VertexAttribDivisor(4, 1);
-
-        gl::EnableVertexAttribArray(5); // aColor
-        gl::VertexAttribPointer(
-            5,
+            a_color,
             4,
             gl::UNSIGNED_BYTE,
             gl::TRUE,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, color) as *const c_void,
+            SPRITE_VERTEX_STRIDE as i32,
+            (mem::size_of::<f32>() * 4) as *const c_void,
         );
-        gl::VertexAttribDivisor(5, 1);
+        gl::EnableVertexAttribArray(a_color);
 
-        gl::EnableVertexAttribArray(6); // aOffset
+        let a_texture = gl::GetAttribLocation(shader_program, cstr!("aTexture")) as u32;
         gl::VertexAttribPointer(
-            6,
-            2,
-            gl::FLOAT,
-            gl::FALSE,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, pos) as *const c_void,
-        );
-        gl::VertexAttribDivisor(6, 1);
-
-        gl::EnableVertexAttribArray(7); // aTextureIndex
-        gl::VertexAttribIPointer(
-            7,
+            a_texture,
             1,
-            gl::INT,
-            INSTANCE_STRIDE,
-            memoffset::offset_of!(SpriteInstance, texture) as *const c_void,
+            gl::UNSIGNED_SHORT,
+            gl::FALSE,
+            SPRITE_VERTEX_STRIDE as i32,
+            (mem::size_of::<f32>() * 5) as *const c_void,
         );
-        gl::VertexAttribDivisor(7, 1);
+        gl::EnableVertexAttribArray(a_texture);
+
+        gl_check_error!("set vertex attributes");
 
         gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-        gl::BindVertexArray(0);
+        if major_version > 2 {
+            gl::BindVertexArray(0);
+        }
 
         vao
     }
@@ -774,12 +809,40 @@ void main()
         Ok(())
     }
 }
-impl SpriteRender for GLSpriteRender {
+
+/// Parse a OpenGL version string "<major>.<minor><whatever..>" (where major and minor are sequences
+/// of ascii digits) into tuple `(major, minor)`.
+fn parse_version_number(version: &CStr) -> Option<(u8, u8)> {
+    let bytes = version.to_bytes();
+    let Some(start_pos) = bytes.iter().position(|x| x.is_ascii_digit()) else {
+        return None;
+    };
+    let Some(( dot_pos , _)) = bytes
+        .iter()
+        .enumerate()
+        .skip(start_pos)
+        .find(|(_, x)| !x.is_ascii_digit())
+    else {
+        return None;
+    };
+    let end_pos = bytes
+        .iter()
+        .enumerate()
+        .skip(dot_pos + 1)
+        .find(|(_, x)| !x.is_ascii_digit())
+        .map(|x| x.0)
+        .unwrap_or(bytes.len());
+
+    let major = std::str::from_utf8(&bytes[start_pos..dot_pos]).expect("is pure ascii");
+    let minor = std::str::from_utf8(&bytes[dot_pos + 1..end_pos]).expect("is pure ascii");
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+impl SpriteRender for GlSpriteRender {
     fn add_window(&mut self, window: &Window) {
         let window_id = window.id();
 
         // TODO: propagate errors
-        let mut context = Context::new(
+        let context = Context::new(
             window,
             self.vsync,
             self.current_context.as_ref().map(|x| &x.1),
@@ -795,8 +858,9 @@ impl SpriteRender for GLSpriteRender {
             gl::Enable(gl::BLEND);
         }
 
-        self.current_context.as_mut().unwrap().1.vao =
-            unsafe { Self::create_vao(self.vertex_buffer, self.instance_buffer) };
+        self.current_context.as_mut().unwrap().1.vao = unsafe {
+            Self::create_vao(self.shader_program, self.vertex_buffer, self.major_version)
+        };
     }
 
     fn remove_window(&mut self, window_id: WindowId) {
@@ -820,6 +884,7 @@ impl SpriteRender for GLSpriteRender {
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
+        log::trace!("new texture {width}x{height}");
         unsafe {
             let mut texture = 0;
             gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
@@ -853,13 +918,13 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data_ptr,
             );
-            gl_check_error!("new_texure");
             self.textures.push((texture, width, height));
             texture
         }
     }
 
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
+        log::trace!("update texture {texture}");
         let rect = sub_rect.unwrap_or({
             let size = self
                 .textures
@@ -879,7 +944,6 @@ impl SpriteRender for GLSpriteRender {
         );
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
-            gl_check_error!("BindTexture");
             gl::TexSubImage2D(
                 gl::TEXTURE_2D,
                 0,
@@ -891,7 +955,6 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data.as_ptr() as *const c_void,
             );
-            gl_check_error!("update_texure");
         }
     }
 
@@ -914,22 +977,18 @@ impl SpriteRender for GLSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data_ptr,
             );
-            gl_check_error!("resize_texure");
         }
     }
 
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a> {
-        // TODO: return error
         self.set_current_context(window).unwrap();
-        Box::new(GLRenderer { render: self })
+        Box::new(GlRenderer { render: self })
     }
 
     fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
-        // TODO: return error
         self.set_current_context(window_id).unwrap();
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
-            gl_check_error!("resize");
         }
     }
 }
