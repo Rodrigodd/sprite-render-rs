@@ -192,10 +192,10 @@ impl<'a> Renderer for GlRenderer<'a> {
                 camera.view().as_ptr(),
             );
 
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.render.indice_buffer);
             if let Some(vao) = self.render.vao() {
                 gl::BindVertexArray(vao);
             }
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.render.indice_buffer);
             gl_check_error!("draw arrays instanced");
             gl::DrawElements(
                 gl::TRIANGLES,
@@ -206,6 +206,9 @@ impl<'a> Renderer for GlRenderer<'a> {
 
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+            if self.render.vao().is_some() {
+                gl::BindVertexArray(0);
+            }
 
             gl_check_error!("end frame");
         }
