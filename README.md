@@ -44,7 +44,8 @@ crate-type = ["cdylib"]
 path = "examples/main.rs"
 ``` 
 
-And then run the example by executing `cargo apk run --example main --features=opengles`. Use `adb logcat sprite-render:I *:S RustStdoutStderr:D` to get the logs.
+And then run the example by executing `cargo apk run --example main --features=opengles`. 
+Use `adb logcat sprite-render:I *:S RustStdoutStderr:D` to get the logs.
 
 
 ## License

@@ -24,11 +24,7 @@ use time::Instant;
     ndk_glue::main(
         backtrace = "on",
         ndk_glue = "ndk_glue",
-        logger(
-            level = "trace",
-            tag = "sprite-render",
-            filter = "main,raw_gl_context::android"
-        )
+        logger(level = "trace", tag = "sprite-render", filter = "info")
     )
 )]
 pub fn main() {
@@ -79,7 +75,9 @@ pub fn main() {
         cfg_if::cfg_if! {
             if #[cfg(feature = "opengl")] {
                 Box::new(sprite_render::GLSpriteRender::new(&window, true).unwrap())
-            } else if #[cfg(feature = "opengles")] {
+            } else if #[cfg(all(feature = "opengles", target_os = "android"))] {
+                Box::new(())
+            } else if #[cfg(all(feature = "opengles", not(target_os = "android")))] {
                 Box::new(sprite_render::GlesSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
                 Box::new(sprite_render::WebGLSpriteRender::new(&window))

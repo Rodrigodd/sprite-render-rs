@@ -297,7 +297,15 @@ impl Context<PossiblyCurrentContext> {
         let raw_window_handle = window.raw_window_handle();
         let raw_display_handle = window.raw_display_handle();
 
+        #[cfg(target_os = "macos")]
+        let preference = DisplayApiPreference::Cgl;
+        #[cfg(target_os = "android")]
+        let preference = DisplayApiPreference::Egl;
+        #[cfg(target_os = "linux")]
+        let preference = DisplayApiPreference::GlxThenEgl(Some(raw_window_handle));
+        #[cfg(target_os = "windows")]
         let preference = DisplayApiPreference::WglThenEgl(Some(raw_window_handle));
+
         let display = unsafe { Display::new(raw_display_handle, preference)? };
 
         // let interval = vsync.then_some(1);
