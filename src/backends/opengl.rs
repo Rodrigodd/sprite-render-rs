@@ -132,7 +132,7 @@ impl<'a> Renderer for GlRenderer<'a> {
             return self;
         }
         if sprites.len() > self.render.buffer_size as usize {
-            self.render.reallocate_instance_buffer(sprites.len());
+            self.render.reallocate_vertex_buffer(sprites.len());
         }
 
         self.render.texture_unit_map.clear();
@@ -678,8 +678,9 @@ void main() {{
         Ok(())
     }
 
-    fn reallocate_instance_buffer(&mut self, size_need: usize) {
+    fn reallocate_vertex_buffer(&mut self, size_need: usize) {
         let new_size = size_need.next_power_of_two();
+        log::trace!("reallocating vertex buffer: size need {size_need}, new_size {new_size}");
         unsafe {
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vertex_buffer);
             gl::BufferData(
