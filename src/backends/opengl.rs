@@ -149,14 +149,15 @@ impl<'a> Renderer for GlRenderer<'a> {
                     {
                         unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
                     }
-                    gl::ActiveTexture(gl::TEXTURE0 + self.render.texture_unit_map.len() as u32);
-                    log::trace!("active texture");
+                    let unit = self.render.texture_unit_map.len() as u32;
+                    gl::ActiveTexture(gl::TEXTURE0 + unit);
+                    log::trace!("active texture {}", unit);
                     gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
-                    log::trace!("bind texture");
-                    self.render
-                        .texture_unit_map
-                        .insert(sprite.texture, self.render.texture_unit_map.len() as u32);
-                    self.render.texture_unit_map.len() as u32 - 1
+                    log::trace!("bind texture {}", sprite.texture);
+
+                    self.render.texture_unit_map.insert(sprite.texture, unit);
+
+                    unit
                 };
                 GlSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
             }
