@@ -433,11 +433,6 @@ impl GlSpriteRender {
             log::info!("Running on {}", renderer.to_string_lossy());
         }
 
-        unsafe {
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            gl::Enable(gl::BLEND);
-        }
-
         let mut max_texture_units = 0;
         unsafe {
             gl::GetIntegerv(gl::MAX_TEXTURE_IMAGE_UNITS, &mut max_texture_units);
@@ -445,6 +440,8 @@ impl GlSpriteRender {
         log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
         unsafe {
+            Self::init_context();
+        }
 
         let (shader_program, vertex_buffer, indice_buffer) =
             unsafe { Self::create_resources(max_texture_units) };
@@ -475,6 +472,11 @@ impl GlSpriteRender {
         sprite_render.resize(window.id(), size.width, size.height);
 
         Ok(sprite_render)
+    }
+
+    unsafe fn init_context() {
+        gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        gl::Enable(gl::BLEND);
     }
 
     unsafe fn create_resources(max_texture_units: i32) -> (u32, u32, u32) {
@@ -853,10 +855,7 @@ impl SpriteRender for GlSpriteRender {
             .insert(window_id, Some(context.make_not_current().unwrap()));
         self.set_current_context(window_id).unwrap();
 
-        unsafe {
-            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            gl::Enable(gl::BLEND);
-        }
+        unsafe { Self::init_context() };
 
         self.current_context.as_mut().unwrap().1.vao = unsafe {
             Self::create_vao(self.shader_program, self.vertex_buffer, self.major_version)
