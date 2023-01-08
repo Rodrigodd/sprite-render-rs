@@ -4,9 +4,8 @@ A rust crate for rendering textured rects, with multiple backends (only two flav
 
 ## Backends
 - [x] (), a noop implementation (I should not have implemented that to the unit type...)
-- [x] OpenGL 3.2
+- [x] OpenGL >2.0 (Including ES)
 - [x] WebGl
-- [x] OpenGLES (only Android support currently)
 - [ ] Directx11? Directx12? (I have windows at least)
 - [ ] Vulkan? (My only device with vulkan support is a Android)
 - [ ] Metal? (I don't have a Apple device)
@@ -44,7 +43,7 @@ crate-type = ["cdylib"]
 path = "examples/main.rs"
 ``` 
 
-And then run the example by executing `cargo apk run --example main --features=opengles`. 
+And then run the example by executing `cargo apk run --example main --features=opengl`. 
 Use `adb logcat sprite-render:I *:S RustStdoutStderr:D` to get the logs.
 
 

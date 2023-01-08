@@ -16,19 +16,11 @@ fn generate_gl() {
 
     let dest = env::var("OUT_DIR").unwrap();
 
-    #[cfg(any(feature = "opengles", feature = "opengl"))]
+    #[cfg(feature = "opengl")]
     {
         let mut file = File::create(Path::new(&dest).join("gl_bindings.rs")).unwrap();
         Registry::new(Api::Gl, (4, 6), Profile::Core, Fallbacks::All, [])
             .write_bindings(GlobalGenerator, &mut file)
             .unwrap();
     }
-
-    // #[cfg(feature = "opengles")]
-    // {
-    //     let mut file = File::create(Path::new(&dest).join("gles_bindings.rs")).unwrap();
-    //     Registry::new(Api::Gles2, (2, 0), Profile::Core, Fallbacks::All, [])
-    //         .write_bindings(GlobalGenerator, &mut file)
-    //         .unwrap();
-    // }
 }
