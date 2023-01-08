@@ -444,65 +444,12 @@ impl GlSpriteRender {
         }
         log::info!("MAX_TEXTURE_IMAGE_UNITS: {}", max_texture_units);
 
-        let (shader_program, vertex_buffer, vao, indice_buffer) = unsafe {
-            log::trace!("compiling vert shader");
-            let vert_shader =
-                Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
+        unsafe {
 
-            log::trace!("compiling vert shader");
-            let frag_shader = Self::compile_shader(
-                gl::FRAGMENT_SHADER,
-                &format!(
-                    r#"
-#version 100
-#define MAX_TEXTURE_IMAGE_UNITS {}
-precision mediump float;
+        let (shader_program, vertex_buffer, indice_buffer) =
+            unsafe { Self::create_resources(max_texture_units) };
 
-uniform sampler2D text[MAX_TEXTURE_IMAGE_UNITS];
-
-varying vec4 color;
-varying vec2 TexCoord;
-varying float textureIndex;
-
-void main() {{
-    int t = int(textureIndex);
-    vec4 textureColor;
-    for (int i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++ ) {{
-        if (i == t) textureColor = texture2D(text[i], TexCoord);
-    }}
-    
-    if (textureColor.a == 0.0 || color.a == 0.0) {{
-        discard;
-    }}
-    gl_FragColor = textureColor*color;
-}}
-"#,
-                    max_texture_units,
-                ),
-            )
-            .unwrap();
-
-            log::trace!("linking shader");
-            let shader_program = Self::link_program(vert_shader, frag_shader).unwrap();
-
-            gl_check_error!("linked program");
-
-            gl::UseProgram(shader_program);
-
-            log::trace!("generating buffers");
-            let mut buffers = [0; 2];
-            gl::GenBuffers(2, buffers.as_mut_ptr() as *mut GLuint);
-            let [vertex_buffer, indice_buffer] = buffers;
-            log::debug!("buffers: {} {}", vertex_buffer, indice_buffer);
-
-            gl_check_error!("gen buffers");
-
-            let vao = Self::create_vao(shader_program, vertex_buffer, major_version);
-
-            (shader_program, vertex_buffer, vao, indice_buffer)
-        };
-
-        context.vao = vao;
+        context.vao = unsafe { Self::create_vao(shader_program, vertex_buffer, major_version) };
 
         log::trace!("finished sprite-render creation");
         let mut contexts = HashMap::new();
@@ -528,6 +475,54 @@ void main() {{
         sprite_render.resize(window.id(), size.width, size.height);
 
         Ok(sprite_render)
+    }
+
+    unsafe fn create_resources(max_texture_units: i32) -> (u32, u32, u32) {
+        log::trace!("compiling vert shader");
+        let vert_shader = Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
+        log::trace!("compiling vert shader");
+        let frag_shader = Self::compile_shader(
+            gl::FRAGMENT_SHADER,
+            &format!(
+                r#"
+#version 100
+#define MAX_TEXTURE_IMAGE_UNITS {}
+precision mediump float;
+
+uniform sampler2D text[MAX_TEXTURE_IMAGE_UNITS];
+
+varying vec4 color;
+varying vec2 TexCoord;
+varying float textureIndex;
+
+void main() {{
+    int t = int(textureIndex);
+    vec4 textureColor;
+    for (int i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++ ) {{
+        if (i == t) textureColor = texture2D(text[i], TexCoord);
+    }}
+    
+    if (textureColor.a == 0.0 || color.a == 0.0) {{
+        discard;
+    }}
+    gl_FragColor = textureColor*color;
+}}
+"#,
+                max_texture_units,
+            ),
+        )
+        .unwrap();
+        log::trace!("linking shader");
+        let shader_program = Self::link_program(vert_shader, frag_shader).unwrap();
+        gl_check_error!("linked program");
+        gl::UseProgram(shader_program);
+        log::trace!("generating buffers");
+        let mut buffers = [0; 2];
+        gl::GenBuffers(2, buffers.as_mut_ptr() as *mut GLuint);
+        let [vertex_buffer, indice_buffer] = buffers;
+        log::debug!("buffers: {} {}", vertex_buffer, indice_buffer);
+        gl_check_error!("gen buffers");
+        (shader_program, vertex_buffer, indice_buffer)
     }
 
     unsafe fn compile_shader(shader_type: u32, source: &str) -> Result<u32, String> {
