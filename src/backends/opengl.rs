@@ -296,10 +296,8 @@ impl Context<PossiblyCurrentContext> {
 
         let display = unsafe { Display::new(raw_display_handle, preference)? };
 
-        // let interval = vsync.then_some(1);
         let template = ConfigTemplateBuilder::new()
             .compatible_with_native_window(raw_window_handle)
-            // .with_swap_interval(interval, interval)
             .build();
 
         let config = {
@@ -321,12 +319,6 @@ impl Context<PossiblyCurrentContext> {
 
         let context_attributes = {
             let builder = ContextAttributesBuilder::new();
-            // .with_context_api(
-            // glutin::context::ContextApi::Gles(Some(glutin::context::Version {
-            //     major: 2,
-            //     minor: 0,
-            // })),
-            // );
             let builder = if let Some(context) = shared {
                 builder.with_sharing(&context.context)
             } else {
@@ -438,7 +430,6 @@ pub struct GlSpriteRender {
 }
 impl GlSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
-    // TODO: build a better error handling!!!!
     pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
         let mut context = Context::new(window, vsync, None)?;
 
