@@ -127,42 +127,41 @@ impl<'a> Renderer for GlRenderer<'a> {
         camera: &mut Camera,
         sprites: &[SpriteInstance],
     ) -> &mut dyn Renderer {
+        let res = &mut self.render.shared_resources;
+
         log::trace!("draw {} sprites", sprites.len());
         if sprites.is_empty() {
             return self;
         }
-        if sprites.len() > self.render.buffer_size as usize {
-            self.render.reallocate_vertex_buffer(sprites.len());
+        if sprites.len() > res.buffer_size as usize {
+            res.reallocate_vertex_buffer(sprites.len());
         }
 
-        self.render.texture_unit_map.clear();
+        res.texture_unit_map.clear();
         unsafe {
             let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
 
             for sprite in sprites {
-                let texture_unit = if let Some(t) =
-                    self.render.texture_unit_map.get(&sprite.texture)
-                {
+                let texture_unit = if let Some(t) = res.texture_unit_map.get(&sprite.texture) {
                     *t
                 } else {
-                    if self.render.texture_unit_map.len() == self.render.max_texture_units as usize
-                    {
+                    if res.texture_unit_map.len() == res.max_texture_units as usize {
                         unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
                     }
-                    let unit = self.render.texture_unit_map.len() as u32;
+                    let unit = res.texture_unit_map.len() as u32;
                     gl::ActiveTexture(gl::TEXTURE0 + unit);
                     log::trace!("active texture {}", unit);
                     gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
                     log::trace!("bind texture {}", sprite.texture);
 
-                    self.render.texture_unit_map.insert(sprite.texture, unit);
+                    res.texture_unit_map.insert(sprite.texture, unit);
 
                     unit
                 };
                 GlSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
             }
 
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.render.vertex_buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, res.vertex_buffer);
             gl::BufferSubData(
                 gl::ARRAY_BUFFER,
                 0,
@@ -172,31 +171,33 @@ impl<'a> Renderer for GlRenderer<'a> {
             log::trace!(
                 "buffer subdata: len {}, buffer size {}",
                 data.len(),
-                self.render.buffer_size
+                res.buffer_size
             );
 
             // render
             log::debug!("bind program");
-            gl::UseProgram(self.render.shader_program);
-            let text_units = (0..self.render.max_texture_units).collect::<Vec<i32>>();
+            gl::UseProgram(res.shader_program);
+            let text_units = (0..res.max_texture_units).collect::<Vec<i32>>();
             log::debug!("write uniform");
             gl::Uniform1iv(
-                get_uniform_location(self.render.shader_program, "text"),
+                get_uniform_location(res.shader_program, "text"),
                 16,
                 text_units.as_ptr(),
             );
             log::debug!("write uniform");
             gl::UniformMatrix3fv(
-                get_uniform_location(self.render.shader_program, "view"),
+                get_uniform_location(res.shader_program, "view"),
                 1,
                 gl::FALSE,
                 camera.view().as_ptr(),
             );
 
+            let res = &self.render.shared_resources;
+
             if let Some(vao) = self.render.vao() {
                 gl::BindVertexArray(vao);
             }
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.render.indice_buffer);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, res.indice_buffer);
             gl_check_error!("draw arrays instanced");
             gl::DrawElements(
                 gl::TRIANGLES,
@@ -376,20 +377,64 @@ impl Context<PossiblyCurrentContext> {
     }
 }
 
+/// OpenGL resources that are created only once, and are shader by all OpenGL contexts.
+struct SharedResources {
+    /// The OpenGL object for the Shader.
+    shader_program: u32,
+    /// The OpenGL object for the Indice Buffer.
+    indice_buffer: u32,
+    /// The OpenGL object for the Vertex Buffer.
+    vertex_buffer: u32,
+
+    /// Buffer size in number of sprites
+    buffer_size: u32,
+    // Textures currently loaded in OpenGL. Are a tuple of  (id, width, height)
+    textures: Vec<(u32, u32, u32)>,
+    /// maps a texture to a texture unit
+    texture_unit_map: HashMap<u32, u32>,
+    /// The maximum number of Textures Units supported by the curretn OpenGL context.
+    max_texture_units: i32,
+}
+impl SharedResources {
+    fn reallocate_vertex_buffer(&mut self, size_need: usize) {
+        let new_size = size_need.next_power_of_two();
+        log::trace!("reallocating vertex buffer: size need {size_need}, new_size {new_size}");
+        unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vertex_buffer);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (new_size * SPRITE_VERTEX_STRIDE * 4) as GLsizeiptr,
+                ptr::null(),
+                gl::DYNAMIC_DRAW,
+            );
+            gl_check_error!("reallocate buffer to {}", new_size);
+
+            let indices = (0..(new_size * 6) as u32)
+                .map(|x| (x / 6 * 4) as u16 + [0u16, 1, 2, 1, 2, 3][x as usize % 6])
+                .collect::<Vec<u16>>();
+
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.indice_buffer);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (indices.len() * mem::size_of::<u16>()) as GLsizeiptr,
+                &*indices as *const _ as *const c_void,
+                gl::DYNAMIC_DRAW,
+            );
+            gl_check_error!("reallocate indice buffer to {}", new_size);
+
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+        }
+        self.buffer_size = new_size as u32;
+    }
+}
+
 pub struct GlSpriteRender {
     vsync: bool,
     contexts: HashMap<WindowId, Option<Context<NotCurrentContext>>>,
     current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
     major_version: u8,
-    shader_program: u32,
-    indice_buffer: u32,
-    vertex_buffer: u32,
-    /// Buffer size in number of sprites
-    buffer_size: u32,
-    textures: Vec<(u32, u32, u32)>, // id, width, height
-    /// maps a texture to a texture unit
-    texture_unit_map: HashMap<u32, u32>,
-    max_texture_units: i32,
+
+    shared_resources: SharedResources,
 }
 impl GlSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
@@ -443,10 +488,15 @@ impl GlSpriteRender {
             Self::init_context();
         }
 
-        let (shader_program, vertex_buffer, indice_buffer) =
-            unsafe { Self::create_resources(max_texture_units) };
+        let shared_resources = unsafe { Self::create_resources(max_texture_units) };
 
-        context.vao = unsafe { Self::create_vao(shader_program, vertex_buffer, major_version) };
+        context.vao = unsafe {
+            Self::create_vao(
+                shared_resources.shader_program,
+                shared_resources.vertex_buffer,
+                major_version,
+            )
+        };
 
         log::trace!("finished sprite-render creation");
         let mut contexts = HashMap::new();
@@ -457,16 +507,8 @@ impl GlSpriteRender {
             vsync,
             contexts,
             current_context: Some((window.id(), context)),
-
             major_version,
-            shader_program,
-            vertex_buffer,
-            indice_buffer,
-            buffer_size: 0,
-
-            textures: Vec::new(),
-            texture_unit_map: HashMap::new(),
-            max_texture_units,
+            shared_resources,
         };
         let size = window.inner_size();
         sprite_render.resize(window.id(), size.width, size.height);
@@ -479,7 +521,7 @@ impl GlSpriteRender {
         gl::Enable(gl::BLEND);
     }
 
-    unsafe fn create_resources(max_texture_units: i32) -> (u32, u32, u32) {
+    unsafe fn create_resources(max_texture_units: i32) -> SharedResources {
         log::trace!("compiling vert shader");
         let vert_shader = Self::compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE).unwrap();
         log::trace!("compiling vert shader");
@@ -524,7 +566,18 @@ void main() {{
         let [vertex_buffer, indice_buffer] = buffers;
         log::debug!("buffers: {} {}", vertex_buffer, indice_buffer);
         gl_check_error!("gen buffers");
-        (shader_program, vertex_buffer, indice_buffer)
+
+        SharedResources {
+            shader_program,
+            indice_buffer,
+            vertex_buffer,
+
+            buffer_size: 0,
+
+            textures: Vec::new(),
+            texture_unit_map: HashMap::new(),
+            max_texture_units,
+        }
     }
 
     unsafe fn compile_shader(shader_type: u32, source: &str) -> Result<u32, String> {
@@ -674,37 +727,6 @@ void main() {{
         writer.write_all(&texture.to_ne_bytes())?;
         writer.write_all(&[0, 0])?; //complete the stride
         Ok(())
-    }
-
-    fn reallocate_vertex_buffer(&mut self, size_need: usize) {
-        let new_size = size_need.next_power_of_two();
-        log::trace!("reallocating vertex buffer: size need {size_need}, new_size {new_size}");
-        unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, self.vertex_buffer);
-            gl::BufferData(
-                gl::ARRAY_BUFFER,
-                (new_size * SPRITE_VERTEX_STRIDE * 4) as GLsizeiptr,
-                ptr::null(),
-                gl::DYNAMIC_DRAW,
-            );
-            gl_check_error!("reallocate buffer to {}", new_size);
-
-            let indices = (0..(new_size * 6) as u32)
-                .map(|x| (x / 6 * 4) as u16 + [0u16, 1, 2, 1, 2, 3][x as usize % 6])
-                .collect::<Vec<u16>>();
-
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.indice_buffer);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (indices.len() * mem::size_of::<u16>()) as GLsizeiptr,
-                &*indices as *const _ as *const c_void,
-                gl::DYNAMIC_DRAW,
-            );
-            gl_check_error!("reallocate indice buffer to {}", new_size);
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-        }
-        self.buffer_size = new_size as u32;
     }
 
     /// get vao from the current context
@@ -858,7 +880,8 @@ impl SpriteRender for GlSpriteRender {
         unsafe { Self::init_context() };
 
         self.current_context.as_mut().unwrap().1.vao = unsafe {
-            Self::create_vao(self.shader_program, self.vertex_buffer, self.major_version)
+            let res = &self.shared_resources;
+            Self::create_vao(res.shader_program, res.vertex_buffer, self.major_version)
         };
     }
 
@@ -884,9 +907,10 @@ impl SpriteRender for GlSpriteRender {
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
         log::trace!("new texture {width}x{height}");
+        let res = &mut self.shared_resources;
         unsafe {
             let mut texture = 0;
-            gl::ActiveTexture(gl::TEXTURE0 + self.texture_unit_map.len() as u32);
+            gl::ActiveTexture(gl::TEXTURE0 + res.texture_unit_map.len() as u32);
             gl::GenTextures(1, &mut texture);
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
@@ -917,15 +941,17 @@ impl SpriteRender for GlSpriteRender {
                 gl::UNSIGNED_BYTE,
                 data_ptr,
             );
-            self.textures.push((texture, width, height));
+            res.textures.push((texture, width, height));
             texture
         }
     }
 
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
+        let res = &self.shared_resources;
+
         log::trace!("update texture {texture}");
         let rect = sub_rect.unwrap_or({
-            let size = self
+            let size = res
                 .textures
                 .iter()
                 .find(|(id, _, _)| *id == texture)
