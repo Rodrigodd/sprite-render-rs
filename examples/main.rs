@@ -75,7 +75,7 @@ pub fn main() {
     let mut render: Box<dyn SpriteRender> = {
         cfg_if::cfg_if! {
             if #[cfg(all(feature = "opengl", target_os = "android"))] {
-                Box::new(())
+                Box::new(sprite_render::GlSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(all(feature = "opengl", not(target_os = "android")))] {
                 Box::new(sprite_render::GlSpriteRender::new(&window, true).unwrap())
             } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
@@ -117,7 +117,7 @@ pub fn main() {
     }
 
     #[cfg(not(target_arch = "android"))]
-    create_textures(&mut render, &mut instances);
+    create_textures(render.as_mut(), &mut instances);
 
     let mut clock = Instant::now();
     let mut change_clock = Instant::now();
@@ -141,18 +141,13 @@ pub fn main() {
             #[cfg(target_os = "android")]
             Event::Resumed => {
                 log::info!("creating sprite-render");
-                render = sprite_render::GlSpriteRender::new(&window, true)
-                    .map(|x| Box::new(x) as Box<dyn SpriteRender>)
-                    .unwrap_or_else(|x| {
-                        log::error!("initializing sprite-render failed: {:?}", x);
-                        Box::new(())
-                    });
-                create_textures(&mut render, &mut instances);
+                render.resume(&window);
+                create_textures(render.as_mut(), &mut instances);
             }
             #[cfg(target_os = "android")]
             Event::Suspended => {
                 log::info!("destroying sprite-render");
-                render = Box::new(());
+                render.suspend();
             }
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
                 WindowEvent::CloseRequested => *control_flow = winit::event_loop::ControlFlow::Exit,
@@ -397,7 +392,7 @@ pub fn main() {
     });
 }
 
-fn create_textures(render: &mut Box<dyn SpriteRender>, instances: &mut Box<[SpriteInstance]>) {
+fn create_textures(render: &mut dyn SpriteRender, instances: &mut Box<[SpriteInstance]>) {
     let start = Instant::now();
     let fruit_texture = {
         // let image = image::open("examples/fruits.png")

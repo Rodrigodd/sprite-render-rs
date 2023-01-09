@@ -127,7 +127,9 @@ impl<'a> Renderer for GlRenderer<'a> {
         camera: &mut Camera,
         sprites: &[SpriteInstance],
     ) -> &mut dyn Renderer {
-        let res = &mut self.render.shared_resources;
+        let Some(res) = &mut self.render.shared_resources else {
+            panic!("OpenGL context don't exist.")
+        };
 
         log::trace!("draw {} sprites", sprites.len());
         if sprites.is_empty() {
@@ -175,16 +177,13 @@ impl<'a> Renderer for GlRenderer<'a> {
             );
 
             // render
-            log::debug!("bind program");
             gl::UseProgram(res.shader_program);
             let text_units = (0..res.max_texture_units).collect::<Vec<i32>>();
-            log::debug!("write uniform");
             gl::Uniform1iv(
                 get_uniform_location(res.shader_program, "text"),
                 16,
                 text_units.as_ptr(),
             );
-            log::debug!("write uniform");
             gl::UniformMatrix3fv(
                 get_uniform_location(res.shader_program, "view"),
                 1,
@@ -192,7 +191,9 @@ impl<'a> Renderer for GlRenderer<'a> {
                 camera.view().as_ptr(),
             );
 
-            let res = &self.render.shared_resources;
+            let Some(res) = &self.render.shared_resources else {
+            panic!("OpenGL context don't exist.")
+        };
 
             if let Some(vao) = self.render.vao() {
                 gl::BindVertexArray(vao);
@@ -426,12 +427,37 @@ pub struct GlSpriteRender {
     current_context: Option<(WindowId, Context<PossiblyCurrentContext>)>,
     major_version: u8,
 
-    shared_resources: SharedResources,
+    shared_resources: Option<SharedResources>,
 }
 impl GlSpriteRender {
     /// Get a WindowBuilder and a event_loop (for opengl support), and return a window and Self.
     pub fn new(window: &Window, vsync: bool) -> Result<Self, Error> {
-        let mut context = Context::new(window, vsync, None)?;
+        let mut sprite_render = Self {
+            vsync,
+            contexts: HashMap::new(),
+            current_context: None,
+            major_version: 0,
+            shared_resources: None,
+        };
+
+        #[cfg(target_os = "android")]
+        {
+            // TODO: need to find a reliable way of detecting if Android's window raw_window_handle
+            // is null.
+            // This may panic in the future: https://github.com/rust-windowing/winit/issues/2482
+            if window.inner_size() == (0, 0).into() {
+                return Ok(sprite_render);
+            }
+        }
+
+        sprite_render.create_context_and_resources(window)?;
+
+        Ok(sprite_render)
+    }
+
+    /// Create the first context and resources that will be shared by all following contexts.
+    fn create_context_and_resources(&mut self, window: &Window) -> Result<(), Error> {
+        let mut context = Context::new(window, self.vsync, None)?;
 
         gl::load_with(|symbol| {
             let symbol = CString::new(symbol).unwrap();
@@ -494,17 +520,15 @@ impl GlSpriteRender {
         let window_id = window.id();
         contexts.insert(window_id, None);
 
-        let mut sprite_render = Self {
-            vsync,
-            contexts,
-            current_context: Some((window.id(), context)),
-            major_version,
-            shared_resources,
-        };
-        let size = window.inner_size();
-        sprite_render.resize(window.id(), size.width, size.height);
+        self.contexts = contexts;
+        self.current_context = Some((window.id(), context));
+        self.major_version = major_version;
+        self.shared_resources = Some(shared_resources);
 
-        Ok(sprite_render)
+        let size = window.inner_size();
+        self.resize(window.id(), size.width, size.height);
+
+        Ok(())
     }
 
     unsafe fn init_context() {
@@ -799,6 +823,7 @@ void main() {{
     }
 
     fn set_current_context(&mut self, window_id: WindowId) -> Result<(), glutin::error::Error> {
+        log::trace!("set current context to {:?}", window_id);
         let already_current = self
             .current_context
             .as_ref()
@@ -854,6 +879,7 @@ fn parse_version_number(version: &CStr) -> Option<(u8, u8)> {
 }
 impl SpriteRender for GlSpriteRender {
     fn add_window(&mut self, window: &Window) {
+        log::trace!("add window {:?}", window.id());
         let window_id = window.id();
 
         // TODO: propagate errors
@@ -871,12 +897,15 @@ impl SpriteRender for GlSpriteRender {
         unsafe { Self::init_context() };
 
         self.current_context.as_mut().unwrap().1.vao = unsafe {
-            let res = &self.shared_resources;
+            let Some(res) = &self.shared_resources else {
+                panic!("OpenGL context don't exist.")
+            };
             Self::create_vao(res.shader_program, res.vertex_buffer, self.major_version)
         };
     }
 
     fn remove_window(&mut self, window_id: WindowId) {
+        log::trace!("remove window {:?}", window_id);
         let mut context = self.contexts.remove(&window_id).flatten();
         if let Some((id, _)) = self.current_context.as_mut() {
             if *id == window_id {
@@ -898,7 +927,10 @@ impl SpriteRender for GlSpriteRender {
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
         log::trace!("new texture {width}x{height}");
-        let res = &mut self.shared_resources;
+        let Some(res) = &mut self.shared_resources else {
+            log::error!("OpenGL context don't exist.");
+            return 0;
+        };
         unsafe {
             let mut texture = 0;
             gl::ActiveTexture(gl::TEXTURE0 + res.texture_unit_map.len() as u32);
@@ -938,7 +970,9 @@ impl SpriteRender for GlSpriteRender {
     }
 
     fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
-        let res = &self.shared_resources;
+        let Some(res) = &self.shared_resources else {
+            panic!("OpenGL context don't exist.")
+        };
 
         log::trace!("update texture {texture}");
         let rect = sub_rect.unwrap_or({
@@ -996,15 +1030,36 @@ impl SpriteRender for GlSpriteRender {
         }
     }
 
-    fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a> {
-        self.set_current_context(window).unwrap();
+    fn render<'a>(&'a mut self, window_id: WindowId) -> Box<dyn Renderer + 'a> {
+        log::trace!("render {:?}", window_id);
+        if self.shared_resources.is_none() {
+            log::warn!("OpenGL context don't exist.");
+            return Box::new(crate::NoopRenderer);
+        }
+        self.set_current_context(window_id).unwrap();
         Box::new(GlRenderer { render: self })
     }
 
     fn resize(&mut self, window_id: WindowId, width: u32, height: u32) {
+        log::trace!("resize {:?}", window_id);
+        if self.shared_resources.is_none() {
+            log::warn!("OpenGL context don't exist.");
+            return;
+        };
         self.set_current_context(window_id).unwrap();
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
         }
+    }
+
+    fn resume(&mut self, window: &Window) {
+        self.create_context_and_resources(window).unwrap();
+    }
+
+    fn suspend(&mut self) {
+        self.contexts.clear();
+        self.current_context.take();
+        self.major_version = 0;
+        self.shared_resources = None;
     }
 }

@@ -28,6 +28,16 @@ pub trait SpriteRender {
     fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]);
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a>;
     fn resize(&mut self, window: WindowId, width: u32, height: u32);
+
+    /// Resume the given window.
+    ///
+    /// Only used on Android. Allows recreating the Rendering context when it is lost.
+    fn resume(&mut self, window: &Window);
+
+    /// Suspends the rendering.
+    ///
+    /// Deletes all Rendering resources.
+    fn suspend(&mut self);
 }
 
 /// A implementation of SpriteRender that does nothing.
@@ -60,4 +70,8 @@ impl SpriteRender for NoopSpriteRender {
     }
 
     fn resize(&mut self, _window: WindowId, _width: u32, _height: u32) {}
+
+    fn resume(&mut self, _: &Window) {}
+
+    fn suspend(&mut self) {}
 }
