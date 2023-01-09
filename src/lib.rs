@@ -29,7 +29,13 @@ pub trait SpriteRender {
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a>;
     fn resize(&mut self, window: WindowId, width: u32, height: u32);
 }
-impl Renderer for () {
+
+/// A implementation of SpriteRender that does nothing.
+pub struct NoopSpriteRender;
+/// A implementation of Renderer that does nothing.
+struct NoopRenderer;
+
+impl Renderer for NoopRenderer {
     fn clear_screen(&mut self, _: &[f32; 4]) -> &mut dyn Renderer {
         self
     }
@@ -39,7 +45,7 @@ impl Renderer for () {
     fn finish(&mut self) {}
 }
 
-impl SpriteRender for () {
+impl SpriteRender for NoopSpriteRender {
     fn add_window(&mut self, _window: &Window) {}
     fn remove_window(&mut self, _window_id: WindowId) {}
 
@@ -50,7 +56,7 @@ impl SpriteRender for () {
     fn resize_texture(&mut self, _: u32, _: u32, _: u32, _: &[u8]) {}
 
     fn render<'a>(&'a mut self, _window: WindowId) -> Box<dyn Renderer + 'a> {
-        Box::new(())
+        Box::new(NoopRenderer)
     }
 
     fn resize(&mut self, _window: WindowId, _width: u32, _height: u32) {}

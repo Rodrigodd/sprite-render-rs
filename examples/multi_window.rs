@@ -107,7 +107,7 @@ fn main() {
             } else {
                 log::warn!("No sprite-render backend was choosen. \
                            Enable one of them by enabling a feature, like `--features=opengl`");
-                Box::new(())
+                Box::new(sprite_render::NoopSpriteRender)
             }
         }
     };

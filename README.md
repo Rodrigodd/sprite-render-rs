@@ -3,17 +3,17 @@
 A rust crate for rendering textured rects, with multiple backends (only two flavors of OpenGL for now).
 
 ## Backends
-- [x] (), a noop implementation (I should not have implemented that to the unit type...)
+- [x] A noop implementation
 - [x] OpenGL >2.0 (Including ES)
 - [x] WebGl
 - [ ] Directx11? Directx12? (I have windows at least)
-- [ ] Vulkan? (My only device with vulkan support is a Android)
-- [ ] Metal? (I don't have a Apple device)
-- [ ] Wgpu? (I have write this to avoid the bloat of gfx-hal)
+- [ ] Vulkan? (My only device with Vulkan support is an Android)
+- [ ] Metal? (I don't have an Apple device)
+- [ ] Wgpu? (I have written this to avoid the bloat of gfx-hal)
 
-# Run a example
+# Run an example
 
-You need to enable the feature of a backend to run a example:
+You need to enable the feature of a backend to run an example:
 
  ```shell
  cargo run --example main --features=opengl
