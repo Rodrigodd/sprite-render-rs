@@ -60,14 +60,12 @@ env_logger = "0.10.0"
 [target.'cfg(target_os = "android")'.dev-dependencies]
 ndk-glue = { version = "0.7.0", features = ["logger"] }
 
+# Make the image decoding be about 10x faster.
 [profile.dev.package.image]
 opt-level = 3
-overflow-checks = false
 [profile.dev.package.png]
 opt-level = 3
-[profile.dev.package.flate2]
-opt-level = 3
-[profile.dev.package.crc32fast]
-opt-level = 3
 [profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.adler]
 opt-level = 3
