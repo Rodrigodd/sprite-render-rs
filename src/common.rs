@@ -1,5 +1,7 @@
 use std::f32::consts::PI;
 
+use crate::TextureId;
+
 #[derive(Clone, Debug)]
 pub struct SpriteInstance {
     pub scale: [f32; 2],
@@ -7,7 +9,7 @@ pub struct SpriteInstance {
     pub uv_rect: [f32; 4],
     pub color: [u8; 4],
     pub pos: [f32; 2],
-    pub texture: u32,
+    pub texture: TextureId,
 }
 impl Default for SpriteInstance {
     fn default() -> Self {
@@ -17,14 +19,21 @@ impl Default for SpriteInstance {
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             color: [255; 4],
             pos: [0.0; 2],
-            texture: 0,
+            texture: TextureId::default(),
         }
     }
 }
 impl SpriteInstance {
     /// Create a new SpriteInstant with center in (x,y) and with the given width, height, texture and uv_rect.
     /// The default color is white ([255, 255, 255, 255]).
-    pub fn new(x: f32, y: f32, width: f32, height: f32, texture: u32, uv_rect: [f32; 4]) -> Self {
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        texture: TextureId,
+        uv_rect: [f32; 4],
+    ) -> Self {
         Self {
             scale: [width, height],
             angle: 0.0,
@@ -38,7 +47,13 @@ impl SpriteInstance {
     /// Create a new SpriteInstant with center in (x,y) and with the given height, texture and uv_rect.
     /// The width is calculated to keep the uv_rect proportion.
     /// The default color is white ([255, 255, 255, 255]).
-    pub fn new_height_prop(x: f32, y: f32, height: f32, texture: u32, uv_rect: [f32; 4]) -> Self {
+    pub fn new_height_prop(
+        x: f32,
+        y: f32,
+        height: f32,
+        texture: TextureId,
+        uv_rect: [f32; 4],
+    ) -> Self {
         let width = height * uv_rect[2] / uv_rect[3];
         Self {
             scale: [width, height],

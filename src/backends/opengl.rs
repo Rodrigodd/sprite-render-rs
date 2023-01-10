@@ -21,7 +21,7 @@ use glutin::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::{Window, WindowId};
 
-use crate::{common::*, Renderer, SpriteRender};
+use crate::{common::*, Renderer, SpriteRender, Texture, TextureError, TextureFilter, TextureId};
 
 mod gl {
     include!(concat!(env!("OUT_DIR"), "/gl_bindings.rs"));
@@ -153,7 +153,8 @@ impl<'a> Renderer for GlRenderer<'a> {
                     let unit = res.texture_unit_map.len() as u32;
                     gl::ActiveTexture(gl::TEXTURE0 + unit);
                     log::trace!("active texture {}", unit);
-                    gl::BindTexture(gl::TEXTURE_2D, sprite.texture);
+                    let texture = sprite.texture.0;
+                    gl::BindTexture(gl::TEXTURE_2D, texture);
                     log::trace!("bind texture {}", sprite.texture);
 
                     res.texture_unit_map.insert(sprite.texture, unit);
@@ -382,9 +383,9 @@ struct SharedResources {
     /// Buffer size in number of sprites
     buffer_size: u32,
     // Textures currently loaded in OpenGL. Are a tuple of  (id, width, height)
-    textures: Vec<(u32, u32, u32)>,
+    textures: Vec<(TextureId, u32, u32)>,
     /// maps a texture to a texture unit
-    texture_unit_map: HashMap<u32, u32>,
+    texture_unit_map: HashMap<TextureId, u32>,
     /// The maximum number of Textures Units supported by the curretn OpenGL context.
     max_texture_units: i32,
 }
@@ -925,12 +926,21 @@ impl SpriteRender for GlSpriteRender {
 
     /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
     /// Pixel art don't use linear filter.
-    fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
+    fn new_texture(&mut self, texture: Texture) -> Result<TextureId, TextureError> {
+        let Texture {
+            width,
+            height,
+            format,
+            filter,
+            data,
+        } = texture;
+
         log::trace!("new texture {width}x{height}");
         let Some(res) = &mut self.shared_resources else {
             log::error!("OpenGL context don't exist.");
-            return 0;
+            return Err(TextureError::RendererContextDontExist);
         };
+
         unsafe {
             let mut texture = 0;
             gl::ActiveTexture(gl::TEXTURE0 + res.texture_unit_map.len() as u32);
@@ -942,39 +952,55 @@ impl SpriteRender for GlSpriteRender {
             gl::TexParameteri(
                 gl::TEXTURE_2D,
                 gl::TEXTURE_MAG_FILTER,
-                if linear_filter {
-                    gl::LINEAR
-                } else {
-                    gl::NEAREST
+                match filter {
+                    TextureFilter::Nearest => gl::NEAREST,
+                    TextureFilter::Linear => gl::LINEAR,
                 } as i32,
             );
-            let data_ptr = if data.len() as u32 >= width * height * 4 {
-                data.as_ptr() as *const c_void
-            } else {
-                std::ptr::null::<c_void>()
+
+            let data_ptr = match data {
+                Some(data) => {
+                    if data.len() as u32 != width * height * 4 {
+                        return Err(TextureError::InvalidLength);
+                    }
+                    data.as_ptr() as *const c_void
+                }
+                None => std::ptr::null::<c_void>(),
             };
+
+            let (internalformat, format, type_) = match format {
+                crate::TextureFormat::Rgba8888 => (gl::RGBA as i32, gl::RGBA, gl::UNSIGNED_BYTE),
+            };
+
             gl::TexImage2D(
                 gl::TEXTURE_2D,
                 0,
-                gl::RGBA as i32,
+                internalformat,
                 width as i32,
                 height as i32,
                 0,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
+                format,
+                type_,
                 data_ptr,
             );
+            let texture = TextureId(texture);
             res.textures.push((texture, width, height));
-            texture
+            Ok(texture)
         }
     }
 
-    fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
-        let Some(res) = &self.shared_resources else {
-            panic!("OpenGL context don't exist.")
+    fn update_texture(
+        &mut self,
+        texture: TextureId,
+        data: Option<&[u8]>,
+        sub_rect: Option<[u32; 4]>,
+    ) -> Result<(), TextureError> {
+        log::trace!("update texture {texture}");
+        let Some(res) = &mut self.shared_resources else {
+            log::error!("OpenGL context don't exist.");
+            return Err(TextureError::RendererContextDontExist);
         };
 
-        log::trace!("update texture {texture}");
         let rect = sub_rect.unwrap_or({
             let size = res
                 .textures
@@ -984,14 +1010,26 @@ impl SpriteRender for GlSpriteRender {
             [0, 0, size.1, size.2]
         });
         let expected_len = (rect[2] * rect[3] * 4) as usize;
-        assert!(
-            data.len() == expected_len,
-            "expected data length was {}x{}x4={}, but receive a data of length {}",
-            rect[2],
-            rect[3],
-            expected_len,
-            data.len()
-        );
+
+        let data_ptr = match data {
+            Some(data) => {
+                if data.len() != expected_len {
+                    log::error!(
+                        "expected data length was {}x{}x4={}, but receive a data of length {}",
+                        rect[2],
+                        rect[3],
+                        expected_len,
+                        data.len()
+                    );
+                    return Err(TextureError::InvalidLength);
+                }
+                data.as_ptr() as *const c_void
+            }
+            None => std::ptr::null::<c_void>(),
+        };
+
+        let texture = texture.0;
+
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexSubImage2D(
@@ -1003,17 +1041,38 @@ impl SpriteRender for GlSpriteRender {
                 rect[3] as i32,
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
-                data.as_ptr() as *const c_void,
+                data_ptr,
             );
         }
+
+        Ok(())
     }
 
-    fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]) {
-        let data_ptr = if data.len() as u32 >= width * height * 4 {
-            data.as_ptr() as *const c_void
-        } else {
-            std::ptr::null::<c_void>()
+    fn resize_texture(
+        &mut self,
+        texture: TextureId,
+        width: u32,
+        height: u32,
+        data: Option<&[u8]>,
+    ) -> Result<(), TextureError> {
+        log::trace!("resize texture {texture}");
+        let Some(_) = &mut self.shared_resources else {
+            log::error!("OpenGL context don't exist.");
+            return Err(TextureError::RendererContextDontExist);
         };
+
+        let texture = texture.0;
+
+        let data_ptr = match data {
+            Some(data) => {
+                if data.len() as u32 != width * height * 4 {
+                    return Err(TextureError::InvalidLength);
+                }
+                data.as_ptr() as *const c_void
+            }
+            None => std::ptr::null::<c_void>(),
+        };
+
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexImage2D(
@@ -1028,6 +1087,8 @@ impl SpriteRender for GlSpriteRender {
                 data_ptr,
             );
         }
+
+        Ok(())
     }
 
     fn render<'a>(&'a mut self, window_id: WindowId) -> Box<dyn Renderer + 'a> {

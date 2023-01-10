@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Error, time::Instant};
 
 use rand::Rng;
-use sprite_render::{Camera, SpriteInstance, SpriteRender};
+use sprite_render::{Camera, SpriteInstance, SpriteRender, Texture, TextureId};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::{
@@ -42,7 +42,12 @@ impl std::fmt::Debug for Scene {
     }
 }
 impl Scene {
-    fn new(rng: &mut impl Rng, fruit_texture: u32, jelly_texture: u32, window: Window) -> Self {
+    fn new(
+        rng: &mut impl Rng,
+        fruit_texture: TextureId,
+        jelly_texture: TextureId,
+        window: Window,
+    ) -> Self {
         let camera = Camera::new(window.inner_size().width, window.inner_size().height, 2.0);
         let mut instances = vec![SpriteInstance::default(); 16384].into_boxed_slice();
         let sprite_size = 0.2;
@@ -122,23 +127,20 @@ fn main() {
         let image = image::open("examples/fruits.png")
             .expect("File not Found!")
             .to_rgba8();
-        render.new_texture(
-            image.width(),
-            image.height(),
-            image.into_raw().as_slice(),
-            true,
-        )
+
+        Texture::new(image.width(), image.height())
+            .data(image.into_raw().as_slice())
+            .create(render.as_mut())
+            .unwrap()
     };
     let jelly_texture = {
         let image = image::open("examples/Jelly.png")
             .expect("File not Found!")
             .to_rgba8();
-        render.new_texture(
-            image.width(),
-            image.height(),
-            image.into_raw().as_slice(),
-            true,
-        )
+        Texture::new(image.width(), image.height())
+            .data(image.into_raw().as_slice())
+            .create(render.as_mut())
+            .unwrap()
     };
 
     let mut rng = rand::thread_rng();

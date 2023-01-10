@@ -2,7 +2,7 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-use sprite_render::{Camera, SpriteInstance, SpriteRender};
+use sprite_render::{Camera, SpriteInstance, SpriteRender, Texture, TextureId};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event::{
@@ -110,7 +110,7 @@ pub fn main() {
             rng.gen_range(-1.0..1.0),
             sprite_size,
             sprite_size,
-            0,
+            TextureId::default(),
             SPRITE[i % SPRITE.len()],
         )
         .with_color(COLORS[i % COLORS.len()]);
@@ -399,24 +399,21 @@ fn create_textures(render: &mut dyn SpriteRender, instances: &mut Box<[SpriteIns
         let image = image::load_from_memory(include_bytes!("fruits.png"))
             .expect("File not Found!")
             .to_rgba8();
-        render.new_texture(
-            image.width(),
-            image.height(),
-            image.into_raw().as_slice(),
-            true,
-        )
+
+        Texture::new(image.width(), image.height())
+            .data(image.into_raw().as_slice())
+            .create(render)
+            .unwrap()
     };
     let jelly_texture = {
         // let image = image::open("examples/Jelly.png")
         let image = image::load_from_memory(include_bytes!("Jelly.png"))
             .expect("File not Found!")
             .to_rgba8();
-        render.new_texture(
-            image.width(),
-            image.height(),
-            image.into_raw().as_slice(),
-            true,
-        )
+        Texture::new(image.width(), image.height())
+            .data(image.into_raw().as_slice())
+            .create(render)
+            .unwrap()
     };
     log::info!("load textures in {:?}", start.elapsed());
     for (i, instance) in instances.iter_mut().enumerate() {
