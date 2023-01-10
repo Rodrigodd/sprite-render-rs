@@ -153,9 +153,9 @@ impl<'a> Renderer for GlRenderer<'a> {
                     let unit = res.texture_unit_map.len() as u32;
                     gl::ActiveTexture(gl::TEXTURE0 + unit);
                     log::trace!("active texture {}", unit);
-                    let texture = sprite.texture.0;
-                    gl::BindTexture(gl::TEXTURE_2D, texture);
                     log::trace!("bind texture {}", sprite.texture);
+                    let texture = res.get_gl_texture(sprite.texture).unwrap().name;
+                    gl::BindTexture(gl::TEXTURE_2D, texture);
 
                     res.texture_unit_map.insert(sprite.texture, unit);
 
@@ -371,6 +371,14 @@ impl Context<PossiblyCurrentContext> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct GlTexture {
+    id: TextureId,
+    name: u32,
+    width: u32,
+    height: u32,
+}
+
 /// OpenGL resources that are created only once, and are shader by all OpenGL contexts.
 struct SharedResources {
     /// The OpenGL object for the Shader.
@@ -382,14 +390,18 @@ struct SharedResources {
 
     /// Buffer size in number of sprites
     buffer_size: u32,
-    // Textures currently loaded in OpenGL. Are a tuple of  (id, width, height)
-    textures: Vec<(TextureId, u32, u32)>,
+    // Textures currently loaded in OpenGL.
+    textures: Vec<GlTexture>,
     /// maps a texture to a texture unit
     texture_unit_map: HashMap<TextureId, u32>,
     /// The maximum number of Textures Units supported by the curretn OpenGL context.
     max_texture_units: i32,
 }
 impl SharedResources {
+    pub fn get_gl_texture(&self, id: TextureId) -> Option<GlTexture> {
+        self.textures.iter().find(|x| x.id == id).copied()
+    }
+
     fn reallocate_vertex_buffer(&mut self, size_need: usize) {
         let new_size = size_need.next_power_of_two();
         log::trace!("reallocating vertex buffer: size need {size_need}, new_size {new_size}");
@@ -928,12 +940,18 @@ impl SpriteRender for GlSpriteRender {
     /// Pixel art don't use linear filter.
     fn new_texture(&mut self, texture: Texture) -> Result<TextureId, TextureError> {
         let Texture {
+            mut id,
             width,
             height,
             format,
             filter,
             data,
         } = texture;
+
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 31);
+        if id.0 == u32::max_value() {
+            id.0 = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
 
         log::trace!("new texture {width}x{height}");
         let Some(res) = &mut self.shared_resources else {
@@ -942,9 +960,22 @@ impl SpriteRender for GlSpriteRender {
         };
 
         unsafe {
-            let mut texture = 0;
-            gl::ActiveTexture(gl::TEXTURE0 + res.texture_unit_map.len() as u32);
-            gl::GenTextures(1, &mut texture);
+            let texture = match res.get_gl_texture(id) {
+                Some(x) => x.name,
+                None => {
+                    let mut texture = 0;
+                    gl::ActiveTexture(gl::TEXTURE0 + res.texture_unit_map.len() as u32);
+                    gl::GenTextures(1, &mut texture);
+                    res.textures.push(GlTexture {
+                        id,
+                        name: texture,
+                        width,
+                        height,
+                    });
+                    texture
+                }
+            };
+
             gl::BindTexture(gl::TEXTURE_2D, texture);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
@@ -983,9 +1014,7 @@ impl SpriteRender for GlSpriteRender {
                 type_,
                 data_ptr,
             );
-            let texture = TextureId(texture);
-            res.textures.push((texture, width, height));
-            Ok(texture)
+            Ok(id)
         }
     }
 
@@ -1001,14 +1030,9 @@ impl SpriteRender for GlSpriteRender {
             return Err(TextureError::RendererContextDontExist);
         };
 
-        let rect = sub_rect.unwrap_or({
-            let size = res
-                .textures
-                .iter()
-                .find(|(id, _, _)| *id == texture)
-                .unwrap();
-            [0, 0, size.1, size.2]
-        });
+        let t = res.get_gl_texture(texture).unwrap();
+
+        let rect = sub_rect.unwrap_or([0, 0, t.width, t.height]);
         let expected_len = (rect[2] * rect[3] * 4) as usize;
 
         let data_ptr = match data {
@@ -1028,7 +1052,7 @@ impl SpriteRender for GlSpriteRender {
             None => std::ptr::null::<c_void>(),
         };
 
-        let texture = texture.0;
+        let texture = t.name;
 
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, texture);
@@ -1039,49 +1063,6 @@ impl SpriteRender for GlSpriteRender {
                 rect[1] as i32,
                 rect[2] as i32,
                 rect[3] as i32,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
-                data_ptr,
-            );
-        }
-
-        Ok(())
-    }
-
-    fn resize_texture(
-        &mut self,
-        texture: TextureId,
-        width: u32,
-        height: u32,
-        data: Option<&[u8]>,
-    ) -> Result<(), TextureError> {
-        log::trace!("resize texture {texture}");
-        let Some(_) = &mut self.shared_resources else {
-            log::error!("OpenGL context don't exist.");
-            return Err(TextureError::RendererContextDontExist);
-        };
-
-        let texture = texture.0;
-
-        let data_ptr = match data {
-            Some(data) => {
-                if data.len() as u32 != width * height * 4 {
-                    return Err(TextureError::InvalidLength);
-                }
-                data.as_ptr() as *const c_void
-            }
-            None => std::ptr::null::<c_void>(),
-        };
-
-        unsafe {
-            gl::BindTexture(gl::TEXTURE_2D, texture);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RGBA as i32,
-                width as i32,
-                height as i32,
-                0,
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
                 data_ptr,

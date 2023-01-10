@@ -6,15 +6,20 @@ pub use common::*;
 use winit::window::{Window, WindowId};
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash, Default)]
-pub struct TextureId(u32);
+pub struct TextureId(pub u32);
+impl TextureId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
 impl std::fmt::Display for TextureId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-#[derive(Debug)]
 /// Error generate in [SpriteRender::new_texture].
+#[derive(Debug)]
 pub enum TextureError {
     /// The length of `data` does not match the expected from its width, height and `TextureFormat`.
     InvalidLength,
@@ -45,6 +50,7 @@ pub enum TextureFilter {
 
 /// A Texture to be loaded in [SpriteRender].
 pub struct Texture<'a> {
+    id: TextureId,
     width: u32,
     height: u32,
     format: TextureFormat,
@@ -55,12 +61,21 @@ impl<'a> Texture<'a> {
     /// Creates a new Texture, with the given dimensions.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
+            id: TextureId(u32::max_value()),
             width,
             height,
             format: TextureFormat::Rgba8888,
             filter: TextureFilter::Linear,
             data: None,
         }
+    }
+
+    /// Sets a stable id for the texture.
+    ///
+    /// Used for replacing a existing texture or recreating it on context loss.
+    pub fn id(mut self, id: TextureId) -> Self {
+        self.id = id;
+        self
     }
 
     /// Set the `TextureFormat` of `data`.
@@ -118,13 +133,6 @@ pub trait SpriteRender {
         data: Option<&[u8]>,
         sub_rect: Option<[u32; 4]>,
     ) -> Result<(), TextureError>;
-    fn resize_texture(
-        &mut self,
-        texture: TextureId,
-        width: u32,
-        height: u32,
-        data: Option<&[u8]>,
-    ) -> Result<(), TextureError>;
     fn render<'a>(&'a mut self, window: WindowId) -> Box<dyn Renderer + 'a>;
     fn resize(&mut self, window: WindowId, width: u32, height: u32);
 
@@ -168,15 +176,6 @@ impl SpriteRender for NoopSpriteRender {
         _: TextureId,
         _: Option<&[u8]>,
         _: Option<[u32; 4]>,
-    ) -> Result<(), TextureError> {
-        Ok(())
-    }
-    fn resize_texture(
-        &mut self,
-        _: TextureId,
-        _: u32,
-        _: u32,
-        _: Option<&[u8]>,
     ) -> Result<(), TextureError> {
         Ok(())
     }
