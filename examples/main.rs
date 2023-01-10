@@ -113,7 +113,7 @@ pub fn main() {
             0,
             SPRITE[i % SPRITE.len()],
         )
-        .with_color(COLORS[i % 100]);
+        .with_color(COLORS[i % COLORS.len()]);
     }
 
     #[cfg(not(target_arch = "android"))]

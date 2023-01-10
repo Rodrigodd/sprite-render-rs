@@ -68,7 +68,7 @@ impl Scene {
                 },
                 SPRITE[i % SPRITE.len()],
             )
-            .with_color(COLORS[i % 100]);
+            .with_color(COLORS[i % COLORS.len()]);
         }
         Self {
             camera,
