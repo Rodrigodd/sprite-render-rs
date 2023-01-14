@@ -9,12 +9,11 @@ use web_sys::{
     console, WebGlBuffer, WebGlProgram, WebGlRenderingContext, WebGlShader, WebGlTexture,
 };
 use winit::{
-    event_loop::{EventLoop, EventLoopWindowTarget},
     platform::web::WindowExtWebSys,
-    window::{Window, WindowBuilder, WindowId},
+    window::{Window, WindowId},
 };
 
-use crate::{common::*, Renderer, SpriteRender};
+use crate::{common::*, Renderer, SpriteRender, Texture, TextureError, TextureFilter, TextureId};
 
 const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
@@ -121,7 +120,7 @@ impl<'a> Renderer for WebGLRenderer<'a> {
         camera: &mut Camera,
         sprites: &[SpriteInstance],
     ) -> &mut dyn Renderer {
-        if sprites.len() == 0 {
+        if sprites.is_empty() {
             return self;
         }
 
@@ -140,19 +139,28 @@ impl<'a> Renderer for WebGLRenderer<'a> {
                 } else {
                     if self.render.texture_unit_map.len() == self.render.max_texture_units as usize
                     {
-                        unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
+                        unimplemented!("Splitting rendering in multiples draw calls when the number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
                     }
-                    self.render.context.active_texture(
-                        WebGlRenderingContext::TEXTURE0 + self.render.texture_unit_map.len() as u32,
-                    );
-                    self.render.context.bind_texture(
-                        WebGlRenderingContext::TEXTURE_2D,
-                        Some(&self.render.textures[sprite.texture as usize - 1].handle),
-                    );
+
+                    let Some(texture) = self.render.get_gl_texture(sprite.texture) else {
+                        log::debug!("{:?}", self.render.textures);
+                        log::error!("texture {:} not found", sprite.texture.0);
+                        continue;
+                    };
+
+                    let unit = self.render.texture_unit_map.len() as u32;
+                    log::trace!("active texture {}, and bind to {}", unit, sprite.texture);
+
                     self.render
-                        .texture_unit_map
-                        .insert(sprite.texture, self.render.texture_unit_map.len() as u32);
-                    self.render.texture_unit_map.len() as u32 - 1
+                        .context
+                        .active_texture(WebGlRenderingContext::TEXTURE0 + unit);
+                    self.render
+                        .context
+                        .bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(&texture.handle));
+
+                    self.render.texture_unit_map.insert(sprite.texture, unit);
+
+                    unit
                 };
                 WebGLSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
             }
@@ -218,7 +226,9 @@ impl<'a> Renderer for WebGLRenderer<'a> {
     fn finish(&mut self) {}
 }
 
-struct Texture {
+#[derive(Clone, Debug)]
+struct GlTexture {
+    id: TextureId,
     handle: WebGlTexture,
     width: u32,
     height: u32,
@@ -227,13 +237,13 @@ struct Texture {
 pub struct WebGLSpriteRender {
     context: WebGlRenderingContext,
     shader_program: WebGlProgram,
-    textures: Vec<Texture>,
+    textures: Vec<GlTexture>,
     buffer: WebGlBuffer,
     indice_buffer: WebGlBuffer,
     /// Buffer size in number of sprites
     buffer_size: u32,
     /// maps a texture to a texture unit
-    texture_unit_map: HashMap<u32, u32>,
+    texture_unit_map: HashMap<TextureId, u32>,
     max_texture_units: i32,
 }
 impl WebGLSpriteRender {
@@ -429,48 +439,48 @@ impl WebGLSpriteRender {
         let h = sprite.uv_rect[3];
 
         // bottom left
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             -cos * width + sin * height + x,
             -sin * width - cos * height + y,
             u,
             v,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // bottom right
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             cos * width + sin * height + x,
             sin * width - cos * height + y,
             u + w,
             v,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // top left
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             -cos * width - sin * height + x,
             -sin * width + cos * height + y,
             u,
             v + h,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&texture.to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
 
         // top right
-        writer.write(&transmute_slice(&[
+        writer.write_all(transmute_slice(&[
             cos * width - sin * height + x,
             sin * width + cos * height + y,
             u + w,
             v + h,
         ]))?;
-        writer.write(&sprite.color)?;
-        writer.write(&(texture as u16).to_ne_bytes())?;
-        writer.write(&[0, 0])?; //complete the stride
+        writer.write_all(&sprite.color)?;
+        writer.write_all(&texture.to_ne_bytes())?;
+        writer.write_all(&[0, 0])?; //complete the stride
         Ok(())
     }
 
@@ -507,26 +517,58 @@ impl WebGLSpriteRender {
             gl_check_error!(
                 &self.context,
                 "reallocate_instance_buffer({})",
-                new_size * SPRITE_VERTEX_STRIDE * 4 as usize
+                new_size * SPRITE_VERTEX_STRIDE * 4
             );
         }
         self.buffer_size = new_size as u32;
+    }
+
+    fn get_gl_texture(&self, id: TextureId) -> Option<GlTexture> {
+        self.textures.iter().find(|x| x.id == id).cloned()
     }
 }
 impl SpriteRender for WebGLSpriteRender {
     fn add_window(&mut self, _: &Window) {
         unimplemented!("Multi window is not implemented in WebGL");
     }
-    fn remove_window(&mut self, window_id: WindowId) {
+    fn remove_window(&mut self, _: WindowId) {
         unimplemented!("Multi window is not implemented in WebGL");
     }
 
-    /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
-    /// Pixel art don't use linear filter.
-    fn new_texture(&mut self, width: u32, height: u32, data: &[u8], linear_filter: bool) -> u32 {
-        self.context
-            .active_texture(WebGlRenderingContext::TEXTURE0 + self.texture_unit_map.len() as u32);
-        let texture = self.context.create_texture().unwrap();
+    fn new_texture(&mut self, texture: Texture) -> Result<TextureId, TextureError> {
+        let Texture {
+            mut id,
+            width,
+            height,
+            format,
+            filter,
+            data,
+        } = texture;
+
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 31);
+        if id.0 == u32::max_value() {
+            id.0 = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        let texture = match self.get_gl_texture(id) {
+            Some(x) => x.handle,
+            None => {
+                self.context.active_texture(
+                    WebGlRenderingContext::TEXTURE0 + self.texture_unit_map.len() as u32,
+                );
+                let texture = self.context.create_texture().unwrap();
+
+                self.textures.push(GlTexture {
+                    id,
+                    handle: texture.clone(),
+                    width,
+                    height,
+                });
+
+                texture
+            }
+        };
+
         self.context
             .bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(&texture));
         self.context.tex_parameteri(
@@ -547,51 +589,71 @@ impl SpriteRender for WebGLSpriteRender {
         self.context.tex_parameteri(
             WebGlRenderingContext::TEXTURE_2D,
             WebGlRenderingContext::TEXTURE_MAG_FILTER,
-            if linear_filter {
-                WebGlRenderingContext::LINEAR
-            } else {
-                WebGlRenderingContext::NEAREST
+            match filter {
+                TextureFilter::Nearest => WebGlRenderingContext::NEAREST,
+                TextureFilter::Linear => WebGlRenderingContext::LINEAR,
             } as i32,
         );
+
+        match data {
+            Some(data) if data.len() as u32 != width * height * 4 => {
+                return Err(TextureError::InvalidLength)
+            }
+            _ => {}
+        };
+
+        let (internalformat, format, type_) = match format {
+            crate::TextureFormat::Rgba8888 => (
+                WebGlRenderingContext::RGBA as i32,
+                WebGlRenderingContext::RGBA,
+                WebGlRenderingContext::UNSIGNED_BYTE,
+            ),
+        };
+
         self.context
             .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
                 WebGlRenderingContext::TEXTURE_2D,
                 0,
-                WebGlRenderingContext::RGBA as i32,
+                internalformat,
                 width as i32,
                 height as i32,
                 0,
-                WebGlRenderingContext::RGBA,
-                WebGlRenderingContext::UNSIGNED_BYTE,
-                if data.len() as u32 >= width * height * 4 {
-                    Some(data)
-                } else {
-                    None
-                },
+                format,
+                type_,
+                data,
             )
             .unwrap();
         gl_check_error!(&self.context, "new_texture",);
 
-        self.textures.push(Texture {
-            handle: texture,
-            width,
-            height,
-        });
-
-        self.textures.len() as u32
+        Ok(id)
     }
 
-    fn update_texture(&mut self, texture: u32, data: &[u8], sub_rect: Option<[u32; 4]>) {
-        let rect = sub_rect.unwrap_or({
-            let texture = &self.textures[texture as usize - 1];
-            [0, 0, texture.width, texture.height]
-        });
-        assert!(data.len() == (rect[2] * rect[3] * 4) as usize);
+    fn update_texture(
+        &mut self,
+        texture: TextureId,
+        data: Option<&[u8]>,
+        sub_rect: Option<[u32; 4]>,
+    ) -> Result<(), TextureError> {
+        let t = self.get_gl_texture(texture).unwrap();
+        let rect = sub_rect.unwrap_or([0, 0, t.width, t.height]);
+        let expected_len = (rect[2] * rect[3] * 4) as usize;
 
-        self.context.bind_texture(
-            WebGlRenderingContext::TEXTURE_2D,
-            Some(&self.textures[texture as usize - 1].handle),
-        );
+        match data {
+            Some(data) if data.len() != expected_len => {
+                log::error!(
+                    "expected data length was {}x{}x4={}, but receive a data of length {}",
+                    rect[2],
+                    rect[3],
+                    expected_len,
+                    data.len()
+                );
+                return Err(TextureError::InvalidLength);
+            }
+            _ => {}
+        };
+
+        self.context
+            .bind_texture(WebGlRenderingContext::TEXTURE_2D, Some(&t.handle));
         self.context
             .tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
                 WebGlRenderingContext::TEXTURE_2D,
@@ -602,34 +664,12 @@ impl SpriteRender for WebGLSpriteRender {
                 rect[3] as i32,
                 WebGlRenderingContext::RGBA,
                 WebGlRenderingContext::UNSIGNED_BYTE,
-                Some(data),
-            );
-        gl_check_error!(&self.context, "update_texture",);
-    }
-
-    fn resize_texture(&mut self, texture: u32, width: u32, height: u32, data: &[u8]) {
-        self.context.bind_texture(
-            WebGlRenderingContext::TEXTURE_2D,
-            Some(&self.textures[texture as usize - 1].handle),
-        );
-        self.context
-            .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-                WebGlRenderingContext::TEXTURE_2D,
-                0,
-                WebGlRenderingContext::RGBA as i32,
-                width as i32,
-                height as i32,
-                0,
-                WebGlRenderingContext::RGBA,
-                WebGlRenderingContext::UNSIGNED_BYTE,
-                if data.len() as u32 >= width * height * 4 {
-                    Some(data)
-                } else {
-                    None
-                },
+                data,
             )
             .unwrap();
-        gl_check_error!(&self.context, "resize_texture",);
+        gl_check_error!(&self.context, "update_texture",);
+
+        Ok(())
     }
 
     fn render<'a>(&'a mut self, _: WindowId) -> Box<dyn Renderer + 'a> {
@@ -639,4 +679,8 @@ impl SpriteRender for WebGLSpriteRender {
     fn resize(&mut self, _window_id: WindowId, width: u32, height: u32) {
         self.context.viewport(0, 0, width as i32, height as i32);
     }
+
+    fn resume(&mut self, _: &Window) {}
+
+    fn suspend(&mut self) {}
 }
