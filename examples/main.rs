@@ -29,7 +29,7 @@ use time::Instant;
 )]
 pub fn main() {
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-    env_logger::init();
+    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
     #[cfg(target_arch = "wasm32")]
     wasm_logger::init(wasm_logger::Config::new(log::Level::Debug));
 
