@@ -148,14 +148,20 @@ impl<'a> Renderer for GlRenderer<'a> {
                     *t
                 } else {
                     if res.texture_unit_map.len() == res.max_texture_units as usize {
-                        unimplemented!("Split rendering in multiples draw calls when number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
+                        unimplemented!("Splitting rendering in multiples draw calls when the number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
                     }
+
+                    let Some(texture) = res.get_gl_texture(sprite.texture) else {
+                        log::debug!("{:?}", &res.textures);
+                        log::error!("texture {:} not found", sprite.texture.0);
+                        continue;
+                    };
+
                     let unit = res.texture_unit_map.len() as u32;
+                    log::trace!("active texture {}, and bind to {}", unit, sprite.texture);
+
                     gl::ActiveTexture(gl::TEXTURE0 + unit);
-                    log::trace!("active texture {}", unit);
-                    log::trace!("bind texture {}", sprite.texture);
-                    let texture = res.get_gl_texture(sprite.texture).unwrap().name;
-                    gl::BindTexture(gl::TEXTURE_2D, texture);
+                    gl::BindTexture(gl::TEXTURE_2D, texture.name);
 
                     res.texture_unit_map.insert(sprite.texture, unit);
 
@@ -371,7 +377,7 @@ impl Context<PossiblyCurrentContext> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct GlTexture {
     id: TextureId,
     name: u32,
