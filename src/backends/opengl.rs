@@ -152,7 +152,7 @@ impl<'a> Renderer for GlRenderer<'a> {
                     }
 
                     let Some(texture) = res.get_gl_texture(sprite.texture) else {
-                        log::debug!("{:?}", &res.textures);
+                        log::debug!("{:?}", res.textures);
                         log::error!("texture {:} not found", sprite.texture.0);
                         continue;
                     };
@@ -942,8 +942,6 @@ impl SpriteRender for GlSpriteRender {
         drop(context);
     }
 
-    /// Load a Texture in the GPU. if linear_filter is true, the texture will be sampled with linear filter applied.
-    /// Pixel art don't use linear filter.
     fn new_texture(&mut self, texture: Texture) -> Result<TextureId, TextureError> {
         let Texture {
             mut id,
