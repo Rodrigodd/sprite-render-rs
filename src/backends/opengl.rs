@@ -959,8 +959,8 @@ impl SpriteRender for GlSpriteRender {
 
         log::trace!("new texture {width}x{height}");
         let Some(res) = &mut self.shared_resources else {
-            log::error!("OpenGL context don't exist.");
-            return Err(TextureError::RendererContextDontExist);
+            log::warn!("OpenGL context don't exist.");
+            return Ok(id);
         };
 
         unsafe {
@@ -1030,8 +1030,8 @@ impl SpriteRender for GlSpriteRender {
     ) -> Result<(), TextureError> {
         log::trace!("update texture {texture}");
         let Some(res) = &mut self.shared_resources else {
-            log::error!("OpenGL context don't exist.");
-            return Err(TextureError::RendererContextDontExist);
+            log::warn!("OpenGL context don't exist.");
+            return Ok(());
         };
 
         let t = res.get_gl_texture(texture).unwrap();
