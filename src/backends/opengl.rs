@@ -298,7 +298,7 @@ impl Context<PossiblyCurrentContext> {
         #[cfg(target_os = "android")]
         let preference = DisplayApiPreference::Egl;
         #[cfg(target_os = "linux")]
-        let preference = DisplayApiPreference::GlxThenEgl(Some(raw_window_handle));
+        let preference = DisplayApiPreference::Egl;
         #[cfg(target_os = "windows")]
         let preference = DisplayApiPreference::WglThenEgl(Some(raw_window_handle));
 
