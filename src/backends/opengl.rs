@@ -199,8 +199,8 @@ impl<'a> Renderer for GlRenderer<'a> {
             );
 
             let Some(res) = &self.render.shared_resources else {
-            panic!("OpenGL context don't exist.")
-        };
+                panic!("OpenGL context don't exist.")
+            };
 
             if let Some(vao) = self.render.vao() {
                 gl::BindVertexArray(vao);
