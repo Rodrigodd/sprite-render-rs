@@ -28,6 +28,9 @@ mod gl {
 }
 use gl::types::*;
 
+// The sprites are draw using u16 indices. Each sprite uses 4 indices. From that we have the maximum
+// number of sprites
+const MAX_NUMBER_OF_SPRITES: usize = (u16::max_value() as usize + 1) / 4;
 const SPRITE_VERTEX_STRIDE: usize = mem::size_of::<f32>() * 6;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
@@ -139,88 +142,95 @@ impl<'a> Renderer for GlRenderer<'a> {
             res.reallocate_vertex_buffer(sprites.len());
         }
 
-        res.texture_unit_map.clear();
-        unsafe {
-            let mut data: Vec<u8> = Vec::with_capacity(sprites.len() * SPRITE_VERTEX_STRIDE * 4);
+        let mut data: Vec<u8> =
+            Vec::with_capacity(sprites.len().min(MAX_NUMBER_OF_SPRITES) * SPRITE_VERTEX_STRIDE * 4);
 
-            for sprite in sprites {
-                let texture_unit = if let Some(t) = res.texture_unit_map.get(&sprite.texture) {
-                    *t
-                } else {
-                    if res.texture_unit_map.len() == res.max_texture_units as usize {
-                        unimplemented!("Splitting rendering in multiples draw calls when the number of textures is greater than MAX_TEXTURE_IMAGE_UNITS is unimplemented.");
-                    }
-
-                    let Some(texture) = res.get_gl_texture(sprite.texture) else {
+        let mut sprites = sprites.iter();
+        while sprites.len() > 0 {
+            let res = &mut self.render.shared_resources.as_mut().unwrap();
+            res.texture_unit_map.clear();
+            data.clear();
+            let mut count = 0;
+            unsafe {
+                for sprite in &mut sprites {
+                    let texture_unit = if let Some(t) = res.texture_unit_map.get(&sprite.texture) {
+                        *t
+                    } else {
+                        let Some(texture) = res.get_gl_texture(sprite.texture) else {
                         log::debug!("{:?}", res.textures);
                         log::error!("texture {:} not found", sprite.texture.0);
                         continue;
                     };
 
-                    let unit = res.texture_unit_map.len() as u32;
-                    log::trace!("active texture {}, and bind to {}", unit, sprite.texture);
+                        let unit = res.texture_unit_map.len() as u32;
+                        log::trace!("active texture {}, and bind to {}", unit, sprite.texture);
 
-                    gl::ActiveTexture(gl::TEXTURE0 + unit);
-                    gl::BindTexture(gl::TEXTURE_2D, texture.name);
+                        gl::ActiveTexture(gl::TEXTURE0 + unit);
+                        gl::BindTexture(gl::TEXTURE_2D, texture.name);
 
-                    res.texture_unit_map.insert(sprite.texture, unit);
+                        res.texture_unit_map.insert(sprite.texture, unit);
 
-                    unit
+                        unit
+                    };
+                    GlSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
+
+                    count += 1;
+
+                    // split rendering in multiple draw calls if necessary
+                    if res.texture_unit_map.len() == res.max_texture_units as usize
+                        || count == MAX_NUMBER_OF_SPRITES as i32
+                    {
+                        break;
+                    }
+                }
+
+                gl::BindBuffer(gl::ARRAY_BUFFER, res.vertex_buffer);
+                gl::BufferSubData(
+                    gl::ARRAY_BUFFER,
+                    0,
+                    data.len() as GLsizeiptr,
+                    data.as_ptr() as *const c_void,
+                );
+                log::trace!(
+                    "buffer subdata: len {}, buffer size {}",
+                    data.len(),
+                    res.buffer_size
+                );
+
+                // render
+                gl::UseProgram(res.shader_program);
+                let text_units = (0..res.max_texture_units).collect::<Vec<i32>>();
+                gl::Uniform1iv(
+                    get_uniform_location(res.shader_program, "text"),
+                    16,
+                    text_units.as_ptr(),
+                );
+                gl::UniformMatrix3fv(
+                    get_uniform_location(res.shader_program, "view"),
+                    1,
+                    gl::FALSE,
+                    camera.view().as_ptr(),
+                );
+
+                let Some(res) = &self.render.shared_resources else {
+                    panic!("OpenGL context don't exist.")
                 };
-                GlSpriteRender::write_sprite(&mut data, sprite, texture_unit as u16).unwrap();
+
+                if let Some(vao) = self.render.vao() {
+                    gl::BindVertexArray(vao);
+                }
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, res.indice_buffer);
+                gl_check_error!("draw arrays instanced");
+                gl::DrawElements(gl::TRIANGLES, count * 6, gl::UNSIGNED_SHORT, ptr::null());
+
+                gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+                if self.render.vao().is_some() {
+                    gl::BindVertexArray(0);
+                }
+
+                gl_check_error!("end frame");
             }
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, res.vertex_buffer);
-            gl::BufferSubData(
-                gl::ARRAY_BUFFER,
-                0,
-                data.len() as GLsizeiptr,
-                data.as_ptr() as *const c_void,
-            );
-            log::trace!(
-                "buffer subdata: len {}, buffer size {}",
-                data.len(),
-                res.buffer_size
-            );
-
-            // render
-            gl::UseProgram(res.shader_program);
-            let text_units = (0..res.max_texture_units).collect::<Vec<i32>>();
-            gl::Uniform1iv(
-                get_uniform_location(res.shader_program, "text"),
-                16,
-                text_units.as_ptr(),
-            );
-            gl::UniformMatrix3fv(
-                get_uniform_location(res.shader_program, "view"),
-                1,
-                gl::FALSE,
-                camera.view().as_ptr(),
-            );
-
-            let Some(res) = &self.render.shared_resources else {
-                panic!("OpenGL context don't exist.")
-            };
-
-            if let Some(vao) = self.render.vao() {
-                gl::BindVertexArray(vao);
-            }
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, res.indice_buffer);
-            gl_check_error!("draw arrays instanced");
-            gl::DrawElements(
-                gl::TRIANGLES,
-                sprites.len() as i32 * 6,
-                gl::UNSIGNED_SHORT,
-                ptr::null(),
-            );
-
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-            if self.render.vao().is_some() {
-                gl::BindVertexArray(0);
-            }
-
-            gl_check_error!("end frame");
         }
         self
     }

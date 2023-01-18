@@ -94,7 +94,7 @@ pub fn main() {
     let mut rng = rand::thread_rng();
 
     let mut instances: Box<[SpriteInstance]> =
-        vec![SpriteInstance::default(); 16384].into_boxed_slice();
+        vec![SpriteInstance::default(); 1 << 15].into_boxed_slice();
     for i in (0..instances.len()).rev() {
         const COLORS: &[[u8; 4]] = &include!("colors.txt");
         const SPRITE: &[[f32; 4]] = &[
