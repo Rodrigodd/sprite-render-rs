@@ -90,8 +90,8 @@ pub fn main() {
 
     let mut camera = Camera::new(window.inner_size().width, window.inner_size().height, 2.0);
 
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
     let mut instances: Box<[SpriteInstance]> =
         vec![SpriteInstance::default(); 1 << 15].into_boxed_slice();
