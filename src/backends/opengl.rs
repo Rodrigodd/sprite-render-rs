@@ -1103,6 +1103,19 @@ impl SpriteRender for GlSpriteRender {
             return;
         };
         self.set_current_context(window_id).unwrap();
+
+        if width == 0 || height == 0 {
+            log::debug!("width or height are 0: {}x{}", width, height);
+        } else {
+            let ctx = &self.current_context.as_ref().unwrap().1;
+
+            ctx.surface.resize(
+                &ctx.context,
+                NonZeroU32::new(width).unwrap(),
+                NonZeroU32::new(height).unwrap(),
+            );
+        }
+
         unsafe {
             gl::Viewport(0, 0, width as i32, height as i32);
         }
