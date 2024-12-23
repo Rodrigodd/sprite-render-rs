@@ -21,7 +21,7 @@ webgl = []
 
 cfg-if = "1.0.0"
 memoffset = "0.8.0"
-winit = "0.27.5"
+winit = "0.28.7"
 raw-window-handle = "0.5.0"
 log = "0.4.17"
 
